@@ -1,0 +1,3 @@
+LIBRARY PlotTwist
+EXPORTS
+    GetAddonDef
