@@ -9,11 +9,20 @@
 
 namespace PlotTwist {
 
-AddonAPI_t*          HandiworkHook::s_api = nullptr;
+AddonAPI_t*           HandiworkHook::s_api = nullptr;
 std::atomic<uint32_t> HandiworkHook::s_pendingSelectionId{0};
+std::atomic<bool>     HandiworkHook::s_threadActive{false};
 
 void HandiworkHook::Initialize(AddonAPI_t* api) { s_api = api; }
-void HandiworkHook::Shutdown() {}
+
+void HandiworkHook::Shutdown() {
+    // Wait up to 600ms for any in-flight detached thread to finish
+    int waited = 0;
+    while (s_threadActive.load() && waited < 600) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        waited += 10;
+    }
+}
 
 std::string HandiworkHook::SaveClipboard() {
     std::string result;
@@ -133,30 +142,33 @@ uint32_t HandiworkHook::ResolveItemIdToDecorationId(uint32_t itemId) {
 
 void HandiworkHook::TriggerHook() {
     std::thread([]() {
+        s_threadActive = true;
+
         std::string original = SaveClipboard();
         SimulateCtrlClick();
         std::string chatLink = PollClipboard(original, 500);
 
-        if (chatLink.empty()) { RestoreClipboard(original); return; }
+        if (chatLink.empty()) { RestoreClipboard(original); s_threadActive = false; return; }
         if (chatLink.find("[&") == std::string::npos) {
-            RestoreClipboard(original); return;
+            RestoreClipboard(original); s_threadActive = false; return;
         }
 
         // Extract just the [&...] portion if surrounded by other text
         auto linkStart = chatLink.find("[&");
         auto linkEnd   = chatLink.find(']', linkStart);
         if (linkStart == std::string::npos || linkEnd == std::string::npos) {
-            RestoreClipboard(original); return;
+            RestoreClipboard(original); s_threadActive = false; return;
         }
         chatLink = chatLink.substr(linkStart, linkEnd - linkStart + 1);
 
         uint32_t itemId = DecodeChatLink(chatLink);
         RestoreClipboard(original);
 
-        if (itemId == 0) return;
+        if (itemId == 0) { s_threadActive = false; return; }
 
         uint32_t decoId = ResolveItemIdToDecorationId(itemId);
         if (decoId != 0) s_pendingSelectionId = decoId;
+        s_threadActive = false;
     }).detach();
 }
 

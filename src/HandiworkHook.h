@@ -26,7 +26,8 @@ private:
     static uint32_t     DecodeChatLink(const std::string& chatLink);
     static uint32_t     ResolveItemIdToDecorationId(uint32_t itemId);
 
-    static AddonAPI_t* s_api;
+    static AddonAPI_t*        s_api;
+    static std::atomic<bool>  s_threadActive;
 };
 
 } // namespace PlotTwist

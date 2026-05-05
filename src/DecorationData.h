@@ -37,6 +37,7 @@ public:
             std::tuple<std::string,std::string,std::string,std::string>>& meta);
 
     static void SetOnApiLoaded(std::function<void()> cb);
+    static void SetOnMetaLoaded(std::function<void()> cb);
 
 private:
     static void FetchThread();
@@ -51,6 +52,7 @@ private:
     static AddonAPI_t*                         s_api;
     static std::string                         s_dataDir;
     static std::function<void()>               s_onApiLoaded;
+    static std::function<void()>               s_onMetaLoaded;
     static std::thread                         s_thread;
 };
 

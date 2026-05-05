@@ -15,6 +15,7 @@ std::atomic<bool>                   DecorationData::s_running{false};
 AddonAPI_t*                         DecorationData::s_api = nullptr;
 std::string                         DecorationData::s_dataDir;
 std::function<void()>               DecorationData::s_onApiLoaded;
+std::function<void()>               DecorationData::s_onMetaLoaded;
 std::thread                         DecorationData::s_thread;
 
 void DecorationData::Initialize(AddonAPI_t* api, const std::string& dataDir) {
@@ -56,6 +57,11 @@ void DecorationData::SetOnApiLoaded(std::function<void()> cb) {
     s_onApiLoaded = std::move(cb);
 }
 
+void DecorationData::SetOnMetaLoaded(std::function<void()> cb) {
+    // Must be called before Initialize() to avoid race conditions.
+    s_onMetaLoaded = std::move(cb);
+}
+
 void DecorationData::MergeMetadata(
     const std::unordered_map<uint32_t,
         std::tuple<std::string,std::string,std::string,std::string>>& meta)
@@ -69,6 +75,7 @@ void DecorationData::MergeMetadata(
         d.expansion      = std::get<2>(it->second);
         d.wikiSlug       = std::get<3>(it->second);
     }
+    if (s_onMetaLoaded) s_onMetaLoaded();
 }
 
 void DecorationData::LoadApiCache() {

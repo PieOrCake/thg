@@ -36,7 +36,7 @@ std::string g_DataDir;
 // --- Render state ---
 static int   g_GroupBy     = 0; // 0=Type 1=Handiwork 2=Expansion
 static char  g_SearchBuf[256] = {};
-static bool  g_NeedRebuild  = true;
+static std::atomic<bool> g_NeedRebuild{true};
 
 // --- Selection state ---
 static uint32_t    g_SelectedId = 0;
@@ -268,6 +268,7 @@ void AddonLoad(AddonAPI_t* aApi) {
     APIDefs->GUI_RegisterCloseOnEscape("Plot Twist", &g_WindowVisible);
 
     DecorationData::SetOnApiLoaded([]() { g_NeedRebuild = true; });
+    DecorationData::SetOnMetaLoaded([]() { g_NeedRebuild = true; });
     DecorationData::Initialize(APIDefs, g_DataDir);
     MetadataScraper::Initialize(APIDefs, g_DataDir);
     WikiPreview::Initialize(APIDefs, g_DataDir);
