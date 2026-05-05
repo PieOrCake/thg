@@ -89,12 +89,12 @@ static void AddonRender() {
     // Check for selection from HandiworkHook
     uint32_t pending = HandiworkHook::s_pendingSelectionId.exchange(0);
     if (pending != 0) {
-        const Decoration* d = DecorationData::FindById(pending);
-        if (d) {
+        auto dPendOpt = DecorationData::FindByIdCopy(pending);
+        if (dPendOpt) {
             g_SelectedId       = pending;
-            g_SelectedWikiSlug = d->wikiSlug;
+            g_SelectedWikiSlug = dPendOpt->wikiSlug;
             g_WindowVisible    = true;
-            WikiPreview::Request(pending, d->wikiSlug);
+            WikiPreview::Request(pending, dPendOpt->wikiSlug, dPendOpt->iconUrl);
 
             // Find scroll target
             auto [gi, ii] = DecorationList::FindPosition(pending);
@@ -180,7 +180,7 @@ static void AddonRender() {
                 if (ImGui::Selectable(item.name.c_str(), selected)) {
                     g_SelectedId       = item.id;
                     g_SelectedWikiSlug = item.wikiSlug;
-                    WikiPreview::Request(item.id, item.wikiSlug);
+                    WikiPreview::Request(item.id, item.wikiSlug, item.iconUrl);
                 }
             }
         }
@@ -196,49 +196,42 @@ static void AddonRender() {
     if (g_SelectedId == 0) {
         ImGui::TextDisabled("Select a decoration to preview");
     } else {
-        const Decoration* d = DecorationData::FindById(g_SelectedId);
-        if (d) {
-            ImGui::TextColored(ImVec4(0.53f, 0.67f, 1.0f, 1.0f), "%s", d->name.c_str());
+        auto dOpt = DecorationData::FindByIdCopy(g_SelectedId);
+        if (dOpt) {
+            const Decoration& d = *dOpt;
+            ImGui::TextColored(ImVec4(0.53f, 0.67f, 1.0f, 1.0f), "%s", d.name.c_str());
             ImGui::Separator();
 
             float imgSize = std::min(ImGui::GetContentRegionAvail().x, 200.0f);
 
-            Texture_t* wikiTex = WikiPreview::GetTexture(d->id);
+            Texture_t* wikiTex = WikiPreview::GetTexture(d.id);
             if (wikiTex) {
                 ImGui::Image((ImTextureID)wikiTex->Resource, ImVec2(imgSize, imgSize));
             } else {
-                // Show API icon while wiki image loads
-                std::string texId = "PT_ICON_" + std::to_string(d->id);
-                Texture_t* iconTex = APIDefs->Textures_GetOrCreateFromURL(
-                    texId.c_str(), d->iconUrl.c_str(), nullptr);
-                if (iconTex)
-                    ImGui::Image((ImTextureID)iconTex->Resource, ImVec2(64, 64));
-                else
-                    ImGui::Dummy(ImVec2(64, 64));
-
-                if (WikiPreview::IsLoading(d->id)) {
+                ImGui::Dummy(ImVec2(64, 64));
+                if (WikiPreview::IsLoading(d.id)) {
                     ImGui::SameLine();
-                    ImGui::TextDisabled("Loading wiki image...");
+                    ImGui::TextDisabled("Loading preview...");
                 }
             }
 
             ImGui::Spacing();
-            if (!d->category.empty()) {
+            if (!d.category.empty()) {
                 ImGui::TextDisabled("Type:");       ImGui::SameLine();
-                ImGui::Text("%s", d->category.c_str());
+                ImGui::Text("%s", d.category.c_str());
             }
-            if (!d->handiworkLevel.empty()) {
+            if (!d.handiworkLevel.empty()) {
                 ImGui::TextDisabled("Handiwork:");  ImGui::SameLine();
-                ImGui::Text("%s", d->handiworkLevel.c_str());
+                ImGui::Text("%s", d.handiworkLevel.c_str());
             }
-            if (!d->expansion.empty()) {
+            if (!d.expansion.empty()) {
                 ImGui::TextDisabled("Expansion:");  ImGui::SameLine();
-                ImGui::Text("%s", d->expansion.c_str());
+                ImGui::Text("%s", d.expansion.c_str());
             }
-            if (!d->wikiSlug.empty()) {
+            if (!d.wikiSlug.empty()) {
                 ImGui::Spacing();
                 if (ImGui::SmallButton("Open wiki page")) {
-                    std::string url = "https://wiki.guildwars2.com/wiki/" + d->wikiSlug;
+                    std::string url = "https://wiki.guildwars2.com/wiki/" + d.wikiSlug;
                     ShellExecuteA(nullptr, "open", url.c_str(),
                                   nullptr, nullptr, SW_SHOWNORMAL);
                 }

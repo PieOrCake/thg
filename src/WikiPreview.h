@@ -16,7 +16,7 @@ public:
     static void Shutdown();
     static void Tick(); // call every frame on render thread
 
-    static void      Request(uint32_t id, const std::string& wikiSlug);
+    static void      Request(uint32_t id, const std::string& wikiSlug, const std::string& fallbackIconUrl = "");
     static Texture_t* GetTexture(uint32_t id);
     static bool       IsLoading(uint32_t id);
 
@@ -28,7 +28,7 @@ private:
     // Callback invoked by Nexus on the render thread when a texture is ready
     static void OnTextureLoaded(const char* identifier, Texture_t* texture);
 
-    struct QueueItem { uint32_t id; std::string wikiSlug; };
+    struct QueueItem { uint32_t id; std::string wikiSlug; std::string fallbackIconUrl; };
     struct ReadyItem { uint32_t id; std::string filePath; };
 
     static AddonAPI_t*              s_api;

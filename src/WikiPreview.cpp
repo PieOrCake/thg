@@ -42,8 +42,8 @@ void WikiPreview::Shutdown() {
     if (s_thread.joinable()) s_thread.join();
 }
 
-void WikiPreview::Request(uint32_t id, const std::string& wikiSlug) {
-    if (wikiSlug.empty()) return;
+void WikiPreview::Request(uint32_t id, const std::string& wikiSlug, const std::string& fallbackIconUrl) {
+    if (wikiSlug.empty() && fallbackIconUrl.empty()) return;
     {
         std::lock_guard<std::mutex> lk(s_cacheMutex);
         if (s_textures.count(id)) return; // already loaded
@@ -61,7 +61,7 @@ void WikiPreview::Request(uint32_t id, const std::string& wikiSlug) {
     }
     {
         std::lock_guard<std::mutex> ql(s_queueMutex);
-        s_queue.push_back({id, wikiSlug});
+        s_queue.push_back({id, wikiSlug, fallbackIconUrl});
     }
     s_cv.notify_one();
 }
@@ -186,7 +186,15 @@ void WikiPreview::WorkerThread() {
         }
 
         std::string path = s_dataDir + "/wiki_images/" + std::to_string(item.id) + ".png";
-        std::string url  = FetchImageUrl(item.wikiSlug);
+        std::string url;
+
+        // Try wiki page image first (if wikiSlug provided)
+        if (!item.wikiSlug.empty())
+            url = FetchImageUrl(item.wikiSlug);
+
+        // Fall back to API icon URL if wiki fetch yielded nothing
+        if (url.empty() && !item.fallbackIconUrl.empty())
+            url = item.fallbackIconUrl;
 
         bool ok = !url.empty() && DownloadImage(url, path);
         if (ok) {

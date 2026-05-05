@@ -5,6 +5,7 @@
 #include <mutex>
 #include <atomic>
 #include <functional>
+#include <optional>
 #include <thread>
 #include "nexus/Nexus.h"
 
@@ -25,10 +26,11 @@ public:
     static void Initialize(AddonAPI_t* api, const std::string& dataDir);
     static void Shutdown();
 
-    static std::vector<Decoration> GetDecorations();
-    static const Decoration*       FindById(uint32_t id);
-    static const Decoration*       FindByName(const std::string& name);
-    static bool                    IsApiLoaded();
+    static std::vector<Decoration>   GetDecorations();
+    static const Decoration*         FindById(uint32_t id);
+    static std::optional<Decoration> FindByIdCopy(uint32_t id);
+    static const Decoration*         FindByName(const std::string& name);
+    static bool                      IsApiLoaded();
 
     // Called by MetadataScraper when wiki data is ready.
     // meta: id -> {category, handiworkLevel, expansion, wikiSlug}

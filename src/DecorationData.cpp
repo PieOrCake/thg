@@ -42,6 +42,13 @@ const Decoration* DecorationData::FindById(uint32_t id) {
     return &s_decorations[it->second];
 }
 
+std::optional<Decoration> DecorationData::FindByIdCopy(uint32_t id) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    auto it = s_idIndex.find(id);
+    if (it == s_idIndex.end()) return std::nullopt;
+    return s_decorations[it->second]; // returns a copy while mutex is held
+}
+
 const Decoration* DecorationData::FindByName(const std::string& name) {
     std::lock_guard<std::mutex> lock(s_mutex);
     for (auto& d : s_decorations) {
