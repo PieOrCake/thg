@@ -19,7 +19,7 @@ public:
 
 private:
     static void   WorkerThread();
-    static bool   NeedsUpdate();          // compares stored vs live lastrevid
+    static std::string CheckNeedsUpdate(); // returns live revid string if update needed, "" if not
     static MetaMap ScrapeWiki();
     static MetaMap LoadCache();
     static void   SaveCache(const MetaMap& meta);

@@ -52,18 +52,25 @@ std::string MetadataScraper::FetchLiveRevision() {
     return {};
 }
 
-bool MetadataScraper::NeedsUpdate() {
+std::string MetadataScraper::CheckNeedsUpdate() {
     // If cache file doesn't exist, always scrape
     std::ifstream cache(s_dataDir + "/decorations_meta.json");
-    if (!cache.is_open()) return true;
+    if (!cache.is_open()) {
+        // No cache — need to scrape but we don't have a live rev yet; fetch it
+        return FetchLiveRevision(); // may return "" on network error, which is fine
+    }
     cache.close();
 
+    // An empty stored revision means the revision file is missing or was never written.
+    // This is intentional behavior: without a stored revision we can't know if we're
+    // current with the wiki, so we must re-scrape to be safe.
     std::string stored = LoadRevision();
-    if (stored.empty()) return true;
+    if (stored.empty()) return FetchLiveRevision();
 
     std::string live = FetchLiveRevision();
-    if (live.empty()) return false; // network error — keep existing
-    return live != stored;
+    if (live.empty()) return ""; // network error — keep existing
+    if (live == stored) return ""; // up to date
+    return live; // needs update — return the revision for saving later
 }
 
 // Extract text content from an HTML tag's inner text, stripping child tags.
@@ -229,13 +236,14 @@ void MetadataScraper::WorkerThread() {
     auto cached = LoadCache();
     if (!cached.empty()) DecorationData::MergeMetadata(cached);
 
-    if (!NeedsUpdate() || !s_running) return;
+    std::string liveRev = CheckNeedsUpdate();
+    if (liveRev.empty() || !s_running) return;
 
     auto meta = ScrapeWiki();
     if (meta.empty() || !s_running) return;
 
     SaveCache(meta);
-    SaveRevision(FetchLiveRevision());
+    SaveRevision(liveRev);  // reuse the already-fetched revision
     DecorationData::MergeMetadata(meta);
 }
 
