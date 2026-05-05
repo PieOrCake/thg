@@ -3,7 +3,6 @@
 #include "HttpClient.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
-#include <sstream>
 #include <algorithm>
 
 namespace PlotTwist {
@@ -39,108 +38,157 @@ std::string MetadataScraper::FetchLiveRevision() {
     try {
         auto resp = HttpClient::Get(
             "https://wiki.guildwars2.com/api.php"
-            "?action=query&titles=Homestead_decorations"
+            "?action=query&titles=Decoration/Homestead"
             "&prop=revisions&rvprop=ids&format=json");
         if (resp.empty()) return {};
         auto j = nlohmann::json::parse(resp);
-        auto& pages = j["query"]["pages"];
-        for (auto& [key, page] : pages.items()) {
-            return std::to_string(
-                page["revisions"][0]["revid"].get<int64_t>());
-        }
+        for (auto& [key, page] : j["query"]["pages"].items())
+            return std::to_string(page["revisions"][0]["revid"].get<int64_t>());
     } catch (...) {}
     return {};
 }
 
 std::string MetadataScraper::CheckNeedsUpdate() {
-    // If cache file doesn't exist, always scrape
     std::ifstream cache(s_dataDir + "/decorations_meta.json");
     if (!cache.is_open()) {
-        // No cache — need to scrape but we don't have a live rev yet; fetch it
-        return FetchLiveRevision(); // may return "" on network error, which is fine
+        // No cache — scrape is needed; fetch live revision now
+        return FetchLiveRevision();
     }
     cache.close();
-
-    // An empty stored revision means the revision file is missing or was never written.
-    // This is intentional behavior: without a stored revision we can't know if we're
-    // current with the wiki, so we must re-scrape to be safe.
     std::string stored = LoadRevision();
-    if (stored.empty()) return FetchLiveRevision();
-
+    // Empty stored revision: re-scrape to establish baseline
     std::string live = FetchLiveRevision();
-    if (live.empty()) return ""; // network error — keep existing
-    if (live == stored) return ""; // up to date
-    return live; // needs update — return the revision for saving later
+    if (live.empty()) return {};        // network error — keep existing
+    if (!stored.empty() && live == stored) return {};  // up to date
+    return live;
 }
 
-// Extract text content from an HTML tag's inner text, stripping child tags.
-static std::string InnerText(const std::string& html) {
+// ---- HTML parsing helpers (file-scope, not exposed) ----
+
+static bool ClassHasToken(const std::string& classes, const std::string& token) {
+    std::string padded = " " + classes + " ";
+    return padded.find(" " + token + " ") != std::string::npos;
+}
+
+static std::string ClassesToCategory(const std::string& classes) {
+    static const std::vector<std::pair<std::string,std::string>> kMap = {
+        {"f-architecture",           "Architecture"},
+        {"f-table-and-seating",      "Table, Seating, Etc."},
+        {"f-storage",                "Storage"},
+        {"f-decor",                  "Decor"},
+        {"f-lighting",               "Lighting"},
+        {"f-planters-and-topiaries", "Planters and Topiaries"},
+        {"f-trees-and-foliages",     "Trees and Foliage"},
+        {"f-natural-features",       "Natural Features"},
+        {"f-sculptures",             "Sculptures"},
+        {"f-flag-signs-markers",     "Flag, Signs, Markers, Etc."},
+        {"f-weapons-and-traps",      "Weapons and Traps"},
+        {"f-trophies",               "Trophies"},
+        {"f-racing",                 "Racing"},
+        {"f-other",                  "Other"},
+        {"f-black-lion",             "Black Lion"},
+    };
+    for (auto& [cls, name] : kMap)
+        if (ClassHasToken(classes, cls)) return name;
+    return "Other";
+}
+
+static std::string ClassesToExpansion(const std::string& classes) {
+    static const std::vector<std::pair<std::string,std::string>> kExp = {
+        {"f-heart-of-thorns",          "Heart of Thorns"},
+        {"f-path-of-fire",             "Path of Fire"},
+        {"f-end-of-dragons",           "End of Dragons"},
+        {"f-secrets-of-the-obscure",   "Secrets of the Obscure"},
+        {"f-janthir-wilds",            "Janthir Wilds"},
+        {"f-visions-of-eternity",      "Visions of Eternity"},
+    };
+    static const std::vector<std::pair<std::string,std::string>> kFest = {
+        {"f-lunar-new-year",             "Lunar New Year"},
+        {"f-super-adventure-box",        "Super Adventure Box"},
+        {"f-dragon-bash",                "Dragon Bash"},
+        {"f-festival-of-the-four-winds", "Festival of the Four Winds"},
+        {"f-shadow-of-the-mad-king",     "Shadow of the Mad King"},
+        {"f-wintersday",                 "Wintersday"},
+    };
+    for (auto& [cls, name] : kExp)
+        if (ClassHasToken(classes, cls)) return name;
+    for (auto& [cls, name] : kFest)
+        if (ClassHasToken(classes, cls)) return name;
+    return "Core";
+}
+
+static std::string ClassesToHandiwork(const std::string& classes) {
+    if (ClassHasToken(classes, "f-400")) return "Grandmaster";
+    if (ClassHasToken(classes, "f-300")) return "Grandmaster";
+    if (ClassHasToken(classes, "f-225")) return "Master";
+    if (ClassHasToken(classes, "f-150")) return "Adept";
+    if (ClassHasToken(classes, "f-75"))  return "Journeyman";
+    if (ClassHasToken(classes, "f-1"))   return "Novice";
+    return "";
+}
+
+static std::string DecodeHtmlEntities(const std::string& s) {
     std::string result;
-    bool inTag = false;
-    for (char c : html) {
-        if (c == '<') { inTag = true; continue; }
-        if (c == '>') { inTag = false; continue; }
-        if (!inTag) result += c;
+    result.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] == '&') {
+            auto semi = s.find(';', i + 1);
+            if (semi != std::string::npos) {
+                std::string entity = s.substr(i, semi - i + 1);
+                if (entity == "&amp;")  { result += '&';  i = semi + 1; continue; }
+                if (entity == "&lt;")   { result += '<';  i = semi + 1; continue; }
+                if (entity == "&gt;")   { result += '>';  i = semi + 1; continue; }
+                if (entity == "&quot;") { result += '"';  i = semi + 1; continue; }
+                if (entity == "&apos;") { result += '\''; i = semi + 1; continue; }
+                // Numeric decimal: &#N;
+                if (s[i+1] == '#' && semi > i + 2) {
+                    try {
+                        int code = std::stoi(s.substr(i + 2, semi - i - 2));
+                        if (code > 0 && code < 128) {
+                            result += (char)code;
+                            i = semi + 1;
+                            continue;
+                        }
+                    } catch (...) {}
+                }
+            }
+        }
+        result += s[i++];
     }
-    // Trim
-    size_t s = result.find_first_not_of(" \t\n\r");
-    size_t e = result.find_last_not_of(" \t\n\r");
-    if (s == std::string::npos) return {};
-    return result.substr(s, e - s + 1);
+    return result;
 }
 
-// Extract href value from first <a href="..."> in html string.
-static std::string ExtractHref(const std::string& html) {
-    auto pos = html.find("href=\"");
-    if (pos == std::string::npos) return {};
-    pos += 6;
-    auto end = html.find('"', pos);
-    if (end == std::string::npos) return {};
-    std::string href = html.substr(pos, end - pos);
-    // Strip leading /wiki/
-    if (href.substr(0, 6) == "/wiki/") href = href.substr(6);
-    return href;
-}
+// Extract the decoration name from a filter-plain div's heading.
+// The heading has two <a> tags: first wraps <img> (icon), second contains the name.
+static std::string ExtractName(const std::string& html, size_t divStart) {
+    auto headingPos = html.find("<div class=\"heading\">", divStart);
+    if (headingPos == std::string::npos) return {};
 
-bool MetadataScraper::ParseRow(const std::string& row,
-    std::string& outName, std::string& outSlug,
-    std::string& outHandiwork, std::string& outExpansion)
-{
-    // Split row into <td>...</td> cells
-    std::vector<std::string> cells;
-    size_t pos = 0;
-    while (true) {
-        auto start = row.find("<td", pos);
-        if (start == std::string::npos) break;
-        auto cStart = row.find('>', start);
-        if (cStart == std::string::npos) break;
-        auto end = row.find("</td>", cStart);
-        if (end == std::string::npos) break;
-        cells.push_back(row.substr(cStart + 1, end - cStart - 1));
-        pos = end + 5;
-    }
-    if (cells.size() < 3) return false;
+    // Skip the first <a>...</a> (icon link, contains <img>)
+    auto firstA = html.find("<a ", headingPos);
+    if (firstA == std::string::npos) return {};
+    auto firstAEnd = html.find("</a>", firstA);
+    if (firstAEnd == std::string::npos) return {};
 
-    outName      = InnerText(cells[0]);
-    outSlug      = ExtractHref(cells[0]);
-    outHandiwork = InnerText(cells[1]);
-    outExpansion = InnerText(cells[2]);
+    // Second <a> contains the name
+    auto secondA = html.find("<a ", firstAEnd + 4);
+    if (secondA == std::string::npos) return {};
+    auto nameClose = html.find('>', secondA);
+    if (nameClose == std::string::npos) return {};
+    auto nameEnd = html.find("</a>", nameClose + 1);
+    if (nameEnd == std::string::npos) return {};
 
-    // Normalise handiwork level capitalisation
-    if (!outHandiwork.empty())
-        outHandiwork[0] = static_cast<char>(std::toupper(
-            static_cast<unsigned char>(outHandiwork[0])));
-
-    return !outName.empty();
+    std::string raw = html.substr(nameClose + 1, nameEnd - nameClose - 1);
+    return DecodeHtmlEntities(raw);
 }
 
 MetaMap MetadataScraper::ScrapeWiki() {
     MetaMap result;
 
-    // Fetch rendered HTML of the decorations page
     auto resp = HttpClient::Get(
         "https://wiki.guildwars2.com/api.php"
-        "?action=parse&page=Homestead_decorations&prop=text&format=json");
+        "?action=parse&page=Decoration/Homestead&prop=text&format=json");
     if (resp.empty()) return result;
 
     std::string html;
@@ -149,52 +197,41 @@ MetaMap MetadataScraper::ScrapeWiki() {
         html = j["parse"]["text"]["*"].get<std::string>();
     } catch (...) { return result; }
 
-    // Walk through <h2>/<h3> section headers to track current category,
-    // then parse <tr> rows within each section's table.
-    std::string currentCategory;
+    const std::string kPrefix = "<div class=\"filter-plain ";
     size_t pos = 0;
+
     while (pos < html.size() && s_running) {
-        // Check for section header
-        auto h2 = html.find("<h2", pos);
-        auto h3 = html.find("<h3", pos);
-        auto tr = html.find("<tr", pos);
+        auto divPos = html.find(kPrefix, pos);
+        if (divPos == std::string::npos) break;
 
-        // Determine what comes next
-        size_t next = std::min({h2, h3, tr});
-        if (next == std::string::npos) break;
+        // Extract full class attribute value (from start of class value to closing quote)
+        size_t classValStart = divPos + 12;           // skip '<div class="'
+        size_t classValEnd   = html.find('"', classValStart);
+        if (classValEnd == std::string::npos) { pos = divPos + kPrefix.size(); continue; }
+        std::string classes = html.substr(classValStart, classValEnd - classValStart);
 
-        if ((next == h2 || next == h3) && next <= tr) {
-            // Extract header text
-            auto hEnd = html.find("</h", next);
-            if (hEnd == std::string::npos) { pos = next + 3; continue; }
-            std::string headerHtml = html.substr(next, hEnd - next + 5);
-            std::string text = InnerText(headerHtml);
-            // Remove edit links "[edit]" that wikis add
-            auto bracket = text.find('[');
-            if (bracket != std::string::npos) text = text.substr(0, bracket);
-            text.erase(std::remove(text.begin(), text.end(), '\n'), text.end());
-            auto trim_end = text.find_last_not_of(" \t");
-            if (trim_end != std::string::npos) text = text.substr(0, trim_end + 1);
-            if (!text.empty()) currentCategory = text;
-            pos = hEnd + 5;
+        // Extract decoration name
+        std::string name = ExtractName(html, divPos);
+        if (name.empty()) { pos = divPos + kPrefix.size(); continue; }
 
-        } else if (next == tr) {
-            // Extract entire <tr>...</tr>
-            auto trEnd = html.find("</tr>", tr);
-            if (trEnd == std::string::npos) { pos = tr + 3; continue; }
-            std::string row = html.substr(tr, trEnd - tr + 5);
-            pos = trEnd + 5;
+        // Match by name against loaded decoration data
+        const Decoration* d = DecorationData::FindByName(name);
+        if (!d) { pos = divPos + kPrefix.size(); continue; }
 
-            std::string name, slug, handiwork, expansion;
-            if (!ParseRow(row, name, slug, handiwork, expansion)) continue;
+        // Derive wikiSlug from decoration name (decoration page, not Handiwork recipe page)
+        std::string slug = name;
+        std::replace(slug.begin(), slug.end(), ' ', '_');
 
-            // Look up decoration ID by name
-            const Decoration* d = DecorationData::FindByName(name);
-            if (!d) continue;
+        result[d->id] = {
+            ClassesToCategory(classes),
+            ClassesToHandiwork(classes),
+            ClassesToExpansion(classes),
+            slug
+        };
 
-            result[d->id] = {currentCategory, handiwork, expansion, slug};
-        }
+        pos = divPos + kPrefix.size();
     }
+
     return result;
 }
 
@@ -221,10 +258,10 @@ void MetadataScraper::SaveCache(const MetaMap& meta) {
     nlohmann::json j;
     for (auto& [id, t] : meta) {
         j[std::to_string(id)] = {
-            {"category",      std::get<0>(t)},
-            {"handiworkLevel",std::get<1>(t)},
-            {"expansion",     std::get<2>(t)},
-            {"wikiSlug",      std::get<3>(t)}
+            {"category",       std::get<0>(t)},
+            {"handiworkLevel", std::get<1>(t)},
+            {"expansion",      std::get<2>(t)},
+            {"wikiSlug",       std::get<3>(t)}
         };
     }
     std::ofstream f(s_dataDir + "/decorations_meta.json");
@@ -232,7 +269,6 @@ void MetadataScraper::SaveCache(const MetaMap& meta) {
 }
 
 void MetadataScraper::WorkerThread() {
-    // Always apply cached metadata immediately if available
     auto cached = LoadCache();
     if (!cached.empty()) DecorationData::MergeMetadata(cached);
 
@@ -243,7 +279,7 @@ void MetadataScraper::WorkerThread() {
     if (meta.empty() || !s_running) return;
 
     SaveCache(meta);
-    SaveRevision(liveRev);  // reuse the already-fetched revision
+    SaveRevision(liveRev);
     DecorationData::MergeMetadata(meta);
 }
 

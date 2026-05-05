@@ -13,11 +13,12 @@ static std::string ToLower(std::string s) {
 }
 
 static const std::vector<std::string> kHandiworkOrder =
-    {"Novice", "Adept", "Expert", "Master"};
+    {"Novice", "Journeyman", "Adept", "Master", "Grandmaster"};
 
 static const std::vector<std::string> kExpansionOrder =
     {"Core", "Heart of Thorns", "Path of Fire",
-     "End of Dragons", "Secrets of the Obscure", "Janthir Wilds"};
+     "End of Dragons", "Secrets of the Obscure", "Janthir Wilds",
+     "Visions of Eternity"};
 
 std::string DecorationList::GetKey(const Decoration& d, GroupBy by) {
     switch (by) {

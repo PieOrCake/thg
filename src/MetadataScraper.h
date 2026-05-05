@@ -27,11 +27,6 @@ private:
     static std::string LoadRevision();
     static std::string FetchLiveRevision();
 
-    // Parses one HTML table row; returns false if row should be skipped.
-    static bool ParseRow(const std::string& row, std::string& outName,
-                         std::string& outSlug, std::string& outHandiwork,
-                         std::string& outExpansion);
-
     static AddonAPI_t*       s_api;
     static std::string       s_dataDir;
     static std::atomic<bool> s_running;

@@ -29,7 +29,7 @@ int main() {
         make(2, "Apple Tree", "Nature",    "Novice",  "Heart of Thorns"),
         make(3, "Arch, Stone","Architecture","Adept", "Core"),
         make(4, "Candle",     "Lighting",  "Novice",  "Path of Fire"),
-        make(5, "Brazier",    "Lighting",  "Expert",  "Core"),
+        make(5, "Brazier",    "Lighting",  "Journeyman",  "Core"),
     };
 
     // --- GroupBy::Type, no filter ---
@@ -46,8 +46,8 @@ int main() {
     DecorationList::Rebuild(all, GroupBy::Handiwork, "");
     auto& gh = DecorationList::GetGroups();
     assert(gh[0].header == "Novice");
-    assert(gh[1].header == "Adept");
-    assert(gh[2].header == "Expert");
+    assert(gh[1].header == "Journeyman");
+    assert(gh[2].header == "Adept");
     assert(gh[3].header == "Master");
 
     // --- GroupBy::Expansion, no filter ---
