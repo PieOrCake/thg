@@ -65,13 +65,15 @@ namespace PlotTwist {
         return result;
     }
 
-    bool HttpClient::DownloadToFile(const std::string& url, const std::string& filePath) {
+    bool HttpClient::DownloadToFile(const std::string& url, const std::string& destPath) {
         HINTERNET hInternet = InternetOpenA("PlotTwist/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return false;
 
-        HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0,
-            INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE, 0);
+        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE |
+                      INTERNET_FLAG_SECURE | INTERNET_FLAG_IGNORE_CERT_CN_INVALID;
+
+        HINTERNET hUrl = InternetOpenUrlA(hInternet, url.c_str(), NULL, 0, flags, 0);
         if (!hUrl) {
             InternetCloseHandle(hInternet);
             return false;
@@ -89,7 +91,7 @@ namespace PlotTwist {
 
         if (buffer.empty()) return false;
 
-        std::ofstream file(filePath, std::ios::binary);
+        std::ofstream file(destPath, std::ios::binary);
         if (!file.is_open()) return false;
         file.write(buffer.data(), buffer.size());
         file.close();
