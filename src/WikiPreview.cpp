@@ -1,6 +1,7 @@
 #include "WikiPreview.h"
 #include "HttpClient.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <fstream>
 #include <filesystem>
 #include <chrono>
@@ -52,11 +53,15 @@ void WikiPreview::Request(uint32_t id, const std::string& wikiSlug, const std::s
         if (s_failTime.count(id) && NowSec() - s_failTime[id] < 600) return;
         s_loading[id] = true;
     }
-    // Check disk cache first
-    std::string path = s_dataDir + "/wiki_images/" + std::to_string(id) + ".png";
-    if (std::filesystem::exists(path)) {
+    // Check disk cache first (may be .png or .jpg)
+    std::string pathPng = s_dataDir + "/wiki_images/" + std::to_string(id) + ".png";
+    std::string pathJpg = s_dataDir + "/wiki_images/" + std::to_string(id) + ".jpg";
+    std::string cachedPath;
+    if (std::filesystem::exists(pathPng)) cachedPath = pathPng;
+    else if (std::filesystem::exists(pathJpg)) cachedPath = pathJpg;
+    if (!cachedPath.empty()) {
         std::lock_guard<std::mutex> rl(s_readyMutex);
-        s_ready.push_back({id, path});
+        s_ready.push_back({id, cachedPath});
         return;
     }
     {
@@ -125,46 +130,18 @@ static std::string WikiUrlEncode(const std::string& s) {
 }
 
 std::string WikiPreview::FetchImageUrl(const std::string& wikiSlug) {
-    // Step 1: get list of images on the wiki page
     auto resp = HttpClient::Get(
         "https://wiki.guildwars2.com/api.php?action=query&titles=" +
-        WikiUrlEncode(wikiSlug) + "&prop=images&format=json&imlimit=10");
+        WikiUrlEncode(wikiSlug) +
+        "&prop=pageimages&pithumbsize=256&format=json");
     if (resp.empty()) return {};
-
-    std::string imageTitle;
     try {
         auto j = nlohmann::json::parse(resp);
-        auto& pages = j["query"]["pages"];
-        for (auto& [key, page] : pages.items()) {
-            if (!page.contains("images")) continue;
-            for (auto& img : page["images"]) {
-                std::string title = img.value("title", "");
-                // Prefer the first image that isn't a nav/icon/UI image
-                if (title.find("File:") == 0 &&
-                    title.find("_nav") == std::string::npos &&
-                    title.find("_icon") == std::string::npos &&
-                    title.find("UI_") == std::string::npos) {
-                    imageTitle = title;
-                    break;
-                }
+        for (auto& [key, page] : j["query"]["pages"].items()) {
+            if (page.contains("thumbnail")) {
+                std::string src = page["thumbnail"].value("source", "");
+                if (!src.empty()) return src;
             }
-        }
-    } catch (...) { return {}; }
-
-    if (imageTitle.empty()) return {};
-
-    // Step 2: resolve image URL
-    resp = HttpClient::Get(
-        "https://wiki.guildwars2.com/api.php?action=query&titles=" +
-        WikiUrlEncode(imageTitle) + "&prop=imageinfo&iiprop=url&format=json");
-    if (resp.empty()) return {};
-
-    try {
-        auto j = nlohmann::json::parse(resp);
-        auto& pages = j["query"]["pages"];
-        for (auto& [key, page] : pages.items()) {
-            if (!page.contains("imageinfo")) continue;
-            return page["imageinfo"][0].value("url", "");
         }
     } catch (...) {}
     return {};
@@ -185,7 +162,6 @@ void WikiPreview::WorkerThread() {
             s_queue.erase(s_queue.begin());
         }
 
-        std::string path = s_dataDir + "/wiki_images/" + std::to_string(item.id) + ".png";
         std::string url;
 
         // Try wiki page image first (if wikiSlug provided)
@@ -195,6 +171,23 @@ void WikiPreview::WorkerThread() {
         // Fall back to API icon URL if wiki fetch yielded nothing
         if (url.empty() && !item.fallbackIconUrl.empty())
             url = item.fallbackIconUrl;
+
+        // Detect extension from URL (wiki thumbnails are typically .jpg)
+        std::string ext = ".png";
+        {
+            auto dotPos = url.rfind('.');
+            if (dotPos != std::string::npos) {
+                std::string tail = url.substr(dotPos);
+                // Strip any query string
+                auto qPos = tail.find('?');
+                if (qPos != std::string::npos) tail = tail.substr(0, qPos);
+                // Lowercase comparison
+                std::string lower = tail;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                if (lower == ".jpg" || lower == ".jpeg") ext = ".jpg";
+            }
+        }
+        std::string path = s_dataDir + "/wiki_images/" + std::to_string(item.id) + ext;
 
         bool ok = !url.empty() && DownloadImage(url, path);
         if (ok) {

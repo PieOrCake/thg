@@ -94,7 +94,14 @@ static void AddonRender() {
             g_SelectedId       = pending;
             g_SelectedWikiSlug = dPendOpt->wikiSlug;
             g_WindowVisible    = true;
-            WikiPreview::Request(pending, dPendOpt->wikiSlug, dPendOpt->iconUrl);
+            {
+                std::string slug = dPendOpt->wikiSlug;
+                if (slug.empty()) {
+                    slug = dPendOpt->name;
+                    std::replace(slug.begin(), slug.end(), ' ', '_');
+                }
+                WikiPreview::Request(pending, slug, dPendOpt->iconUrl);
+            }
 
             // Find scroll target
             auto [gi, ii] = DecorationList::FindPosition(pending);
@@ -180,7 +187,14 @@ static void AddonRender() {
                 if (ImGui::Selectable(item.name.c_str(), selected)) {
                     g_SelectedId       = item.id;
                     g_SelectedWikiSlug = item.wikiSlug;
-                    WikiPreview::Request(item.id, item.wikiSlug, item.iconUrl);
+                    {
+                        std::string slug = item.wikiSlug;
+                        if (slug.empty()) {
+                            slug = item.name;
+                            std::replace(slug.begin(), slug.end(), ' ', '_');
+                        }
+                        WikiPreview::Request(item.id, slug, item.iconUrl);
+                    }
                 }
             }
         }
