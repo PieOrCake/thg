@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <atomic>
 #include <algorithm>
+#include <unordered_set>
 
 #include "nexus/Nexus.h"
 #include "imgui.h"
@@ -47,6 +48,9 @@ static bool g_NeedScroll = false;
 static int  g_ScrollTargetGi = -1;
 static int  g_ScrollTargetIi = -1;
 
+static std::unordered_set<uint32_t> g_IconRequested;
+static void OnIconLoaded(const char*, Texture_t*) {}
+
 static const char* kGroupByLabels[] = {"Type", "Handiwork Level", "Expansion"};
 
 static void LoadSettings() {
@@ -81,6 +85,23 @@ static void AddonOptions() {
     ImGui::Text("Plot Twist");
     ImGui::Separator();
     ImGui::TextDisabled("Use the Nexus keybind settings to configure hotkeys.");
+    ImGui::Spacing();
+    if (ImGui::Button("Clear cache and reload metadata")) {
+        // Delete cache files so next load re-fetches everything
+        std::filesystem::remove(g_DataDir + "/decorations_api.json");
+        std::filesystem::remove(g_DataDir + "/decorations_meta.json");
+        std::filesystem::remove(g_DataDir + "/meta_revision.txt");
+        // Restart the data subsystems
+        DecorationData::Shutdown();
+        MetadataScraper::Shutdown();
+        DecorationData::SetOnApiLoaded([]() { g_NeedRebuild = true; });
+        DecorationData::SetOnMetaLoaded([]() { g_NeedRebuild = true; });
+        DecorationData::Initialize(APIDefs, g_DataDir);
+        MetadataScraper::Initialize(APIDefs, g_DataDir);
+        g_IconRequested.clear();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(fixes missing groups and stale data)");
 }
 
 static void AddonRender() {
@@ -120,6 +141,7 @@ static void AddonRender() {
             static_cast<GroupBy>(g_GroupBy),
             g_SearchBuf);
         g_NeedRebuild = false;
+        g_IconRequested.clear();
 
         // Re-find scroll target after rebuild (group indices may shift)
         if (g_SelectedId != 0 && g_NeedScroll) {
@@ -184,7 +206,19 @@ static void AddonRender() {
                     g_NeedScroll = false;
                 }
 
-                if (ImGui::Selectable(item.name.c_str(), selected)) {
+                const float kIconSz = 20.0f;
+                std::string iconTexId = "PT_ICON_" + std::to_string(item.id);
+
+                // Request icon load once (async, Nexus caches by identifier)
+                if (!g_IconRequested.count(item.id) && !item.iconUrl.empty()) {
+                    g_IconRequested.insert(item.id);
+                    APIDefs->Textures_LoadFromURL(iconTexId.c_str(), item.iconUrl.c_str(), nullptr, OnIconLoaded);
+                }
+
+                // Invisible selectable for full-row click detection
+                float rowX = ImGui::GetCursorPosX();
+                if (ImGui::Selectable(("##" + iconTexId).c_str(), selected,
+                                       ImGuiSelectableFlags_None, ImVec2(0, kIconSz))) {
                     g_SelectedId       = item.id;
                     g_SelectedWikiSlug = item.wikiSlug;
                     {
@@ -196,6 +230,16 @@ static void AddonRender() {
                         WikiPreview::Request(item.id, slug, item.iconUrl);
                     }
                 }
+                // Render icon and text on top of the selectable row
+                ImGui::SameLine(rowX);
+                Texture_t* listIcon = APIDefs->Textures_Get(iconTexId.c_str());
+                if (listIcon && listIcon->Resource) {
+                    ImGui::Image((ImTextureID)listIcon->Resource, ImVec2(kIconSz, kIconSz));
+                } else {
+                    ImGui::Dummy(ImVec2(kIconSz, kIconSz));
+                }
+                ImGui::SameLine();
+                ImGui::TextUnformatted(item.name.c_str());
             }
         }
     }
@@ -216,11 +260,14 @@ static void AddonRender() {
             ImGui::TextColored(ImVec4(0.53f, 0.67f, 1.0f, 1.0f), "%s", d.name.c_str());
             ImGui::Separator();
 
-            float imgSize = std::min(ImGui::GetContentRegionAvail().x, 200.0f);
-
             Texture_t* wikiTex = WikiPreview::GetTexture(d.id);
-            if (wikiTex) {
-                ImGui::Image((ImTextureID)wikiTex->Resource, ImVec2(imgSize, imgSize));
+            if (wikiTex && wikiTex->Resource) {
+                float availW = ImGui::GetContentRegionAvail().x;
+                float imgW   = availW;
+                float imgH   = (wikiTex->Width > 0 && wikiTex->Height > 0)
+                    ? availW * (float)wikiTex->Height / (float)wikiTex->Width
+                    : availW;
+                ImGui::Image((ImTextureID)wikiTex->Resource, ImVec2(imgW, imgH));
             } else {
                 ImGui::Dummy(ImVec2(64, 64));
                 if (WikiPreview::IsLoading(d.id)) {

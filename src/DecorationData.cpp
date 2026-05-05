@@ -5,6 +5,21 @@
 #include <filesystem>
 #include <algorithm>
 
+static std::string StripGW2Markup(const std::string& s) {
+    std::string result;
+    result.reserve(s.size());
+    bool inTag = false;
+    for (char c : s) {
+        if (c == '<') { inTag = true;  continue; }
+        if (c == '>') { inTag = false; continue; }
+        if (!inTag) result += c;
+    }
+    size_t start = result.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return {};
+    size_t end = result.find_last_not_of(" \t\n\r");
+    return result.substr(start, end - start + 1);
+}
+
 namespace PlotTwist {
 
 std::vector<Decoration>             DecorationData::s_decorations;
@@ -97,6 +112,8 @@ void DecorationData::LoadApiCache() {
             d.id      = item["id"].get<uint32_t>();
             d.name    = item.value("name", "");
             d.iconUrl = item.value("iconUrl", "");
+            d.name = StripGW2Markup(d.name);
+            if (d.name.empty()) continue;
             loaded.push_back(std::move(d));
         }
         std::lock_guard<std::mutex> lock(s_mutex);
@@ -149,6 +166,8 @@ void DecorationData::FetchThread() {
                 d.id      = item["id"].get<uint32_t>();
                 d.name    = item.value("name", "");
                 d.iconUrl = item.value("icon", "");
+                d.name = StripGW2Markup(d.name);
+                if (d.name.empty()) continue;
                 fetched.push_back(std::move(d));
             }
         }
