@@ -52,6 +52,7 @@ const Decoration* DecorationData::FindByName(const std::string& name) {
 bool DecorationData::IsApiLoaded() { return s_apiLoaded; }
 
 void DecorationData::SetOnApiLoaded(std::function<void()> cb) {
+    // Must be called before Initialize() to avoid race conditions.
     s_onApiLoaded = std::move(cb);
 }
 
@@ -89,7 +90,7 @@ void DecorationData::LoadApiCache() {
         s_idIndex.clear();
         for (size_t i = 0; i < s_decorations.size(); i++)
             s_idIndex[s_decorations[i].id] = i;
-        s_apiLoaded = true;
+        s_apiLoaded = true; // Set inside mutex to guarantee visibility with data
     } catch (...) {}
 }
 
@@ -149,8 +150,8 @@ void DecorationData::FetchThread() {
             s_idIndex.clear();
             for (size_t i = 0; i < s_decorations.size(); i++)
                 s_idIndex[s_decorations[i].id] = i;
+            s_apiLoaded = true;
         }
-        s_apiLoaded = true;
         SaveApiCache();
         if (s_onApiLoaded) s_onApiLoaded();
 
