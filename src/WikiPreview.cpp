@@ -114,11 +114,21 @@ void WikiPreview::Tick() {
     }
 }
 
+static std::string WikiUrlEncode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == ' ') out += '_';
+        else out += c;
+    }
+    return out;
+}
+
 std::string WikiPreview::FetchImageUrl(const std::string& wikiSlug) {
     // Step 1: get list of images on the wiki page
     auto resp = HttpClient::Get(
         "https://wiki.guildwars2.com/api.php?action=query&titles=" +
-        wikiSlug + "&prop=images&format=json&imlimit=10");
+        WikiUrlEncode(wikiSlug) + "&prop=images&format=json&imlimit=10");
     if (resp.empty()) return {};
 
     std::string imageTitle;
@@ -146,7 +156,7 @@ std::string WikiPreview::FetchImageUrl(const std::string& wikiSlug) {
     // Step 2: resolve image URL
     resp = HttpClient::Get(
         "https://wiki.guildwars2.com/api.php?action=query&titles=" +
-        imageTitle + "&prop=imageinfo&iiprop=url&format=json");
+        WikiUrlEncode(imageTitle) + "&prop=imageinfo&iiprop=url&format=json");
     if (resp.empty()) return {};
 
     try {
