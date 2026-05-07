@@ -20,6 +20,7 @@ If an LLM creating software upsets you, then perhaps this repo isn't for you. Mo
 ## Screenshots
 
 ![Main Window](screenshots/main_window.png)
+![Icon Grid](screenshots/main_window_icons.png)
 
 ## Requirements
 
