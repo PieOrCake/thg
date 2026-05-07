@@ -9,6 +9,7 @@
 #include <atomic>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "nexus/Nexus.h"
 #include "imgui.h"
@@ -58,6 +59,10 @@ static bool g_NeedScroll = false;
 static int  g_ScrollTargetGi = -1;
 static int  g_ScrollTargetIi = -1;
 
+// --- Session persistence ---
+static std::unordered_set<std::string> g_CollapsedGroups; // group headers the user has collapsed
+static bool                            g_NeedRestoreSelection = false; // scroll + preview after first rebuild
+
 // --- Metadata load state ---
 static std::atomic<bool> g_MetaLoaded{false};
 
@@ -67,6 +72,7 @@ static std::atomic<int>      g_HoardState{HOARD_ABSENT};
 
 static std::mutex                            g_OwnedMutex;
 static std::unordered_map<uint32_t, int32_t> g_OwnedCounts;    // item_id → owned count
+static std::unordered_map<uint32_t, int32_t> g_WalletCounts;   // currency_id → amount
 static std::atomic<uint32_t>                 g_OwnedQueryDecoId{0}; // which deco's counts we last queried
 
 
@@ -207,6 +213,7 @@ static void OnHoardDataUpdated(void* args) {
     {
         std::lock_guard<std::mutex> lk(g_OwnedMutex);
         g_OwnedCounts.clear();
+        g_WalletCounts.clear();
     }
 }
 
@@ -227,10 +234,25 @@ static void OnOwnedResponse(void* args) {
     // H&S owns the response pointer — do not delete
 }
 
+static void OnWalletResponse(void* args) {
+    if (!args) { THG_LOG(LOGL_WARNING, "OnWalletResponse: null args"); return; }
+    auto* resp = static_cast<HoardQueryWalletResponse*>(args);
+    THG_LOGF(LOGL_DEBUG, "OnWalletResponse: currency_id=%u status=%u amount=%d",
+             resp->currency_id, resp->status, resp->amount);
+    if (resp->status == HOARD_STATUS_OK) {
+        std::lock_guard<std::mutex> lk(g_OwnedMutex);
+        g_WalletCounts[resp->currency_id] = resp->amount;
+    } else if (resp->status == HOARD_STATUS_DENIED) {
+        THG_LOG(LOGL_WARNING, "OnWalletResponse: DENIED");
+        g_HoardState = HOARD_DENIED;
+    }
+    // H&S owns the response pointer — do not delete
+}
 
 // Must be called from the render thread (Events_Raise must be on render thread).
-static void QueryIngredientCounts(uint32_t decoId, std::vector<uint32_t> itemIds) {
-    THG_LOGF(LOGL_DEBUG, "QueryIngredientCounts: decoId=%u items=%zu", decoId, itemIds.size());
+static void QueryIngredientCounts(uint32_t decoId, std::vector<uint32_t> itemIds, std::vector<uint32_t> currencyIds) {
+    THG_LOGF(LOGL_DEBUG, "QueryIngredientCounts: decoId=%u items=%zu currencies=%zu",
+             decoId, itemIds.size(), currencyIds.size());
     for (auto itemId : itemIds) {
         HoardQueryItemRequest req{};
         req.api_version = HOARD_API_VERSION;
@@ -238,6 +260,14 @@ static void QueryIngredientCounts(uint32_t decoId, std::vector<uint32_t> itemIds
         snprintf(req.response_event, sizeof(req.response_event), "EV_THG_OWNED_RESPONSE");
         req.item_id = itemId;
         APIDefs->Events_Raise(EV_HOARD_QUERY_ITEM, &req);
+    }
+    for (auto currencyId : currencyIds) {
+        HoardQueryWalletRequest req{};
+        req.api_version = HOARD_API_VERSION;
+        snprintf(req.requester,      sizeof(req.requester),      "Tyrian Home & Garden");
+        snprintf(req.response_event, sizeof(req.response_event), "EV_THG_WALLET_RESPONSE");
+        req.currency_id = currencyId;
+        APIDefs->Events_Raise(EV_HOARD_QUERY_WALLET, &req);
     }
     g_OwnedQueryDecoId = decoId;
 }
@@ -247,21 +277,31 @@ static void LoadSettings() {
     if (!f.is_open()) return;
     try {
         auto j = nlohmann::json::parse(f);
-        if (j.contains("group_by"))      g_GroupBy      = j["group_by"];
-        if (j.contains("window_visible")) g_WindowVisible = j["window_visible"];
-        if (j.contains("view_mode"))     g_ViewMode     = j["view_mode"];
-        if (j.contains("split_ratio"))   g_SplitRatio   = j["split_ratio"];
-        if (j.contains("show_qa_icon"))  g_ShowQAIcon   = j["show_qa_icon"];
+        if (j.contains("group_by"))        g_GroupBy      = j["group_by"];
+        if (j.contains("window_visible"))  g_WindowVisible = j["window_visible"];
+        if (j.contains("view_mode"))       g_ViewMode     = j["view_mode"];
+        if (j.contains("split_ratio"))     g_SplitRatio   = j["split_ratio"];
+        if (j.contains("show_qa_icon"))    g_ShowQAIcon   = j["show_qa_icon"];
+        if (j.contains("selected_id")) {
+            g_SelectedId = j["selected_id"].get<uint32_t>();
+            if (g_SelectedId != 0) g_NeedRestoreSelection = true;
+        }
+        if (j.contains("collapsed_groups"))
+            for (auto& s : j["collapsed_groups"])
+                g_CollapsedGroups.insert(s.get<std::string>());
     } catch (...) {}
 }
 
 static void SaveSettings() {
     nlohmann::json j;
-    j["group_by"]      = g_GroupBy;
-    j["window_visible"] = g_WindowVisible;
-    j["view_mode"]     = g_ViewMode;
-    j["split_ratio"]   = g_SplitRatio;
-    j["show_qa_icon"]  = g_ShowQAIcon;
+    j["group_by"]       = g_GroupBy;
+    j["window_visible"]  = g_WindowVisible;
+    j["view_mode"]      = g_ViewMode;
+    j["split_ratio"]    = g_SplitRatio;
+    j["show_qa_icon"]   = g_ShowQAIcon;
+    j["selected_id"]    = g_SelectedId;
+    j["collapsed_groups"] = nlohmann::json::array();
+    for (auto& s : g_CollapsedGroups) j["collapsed_groups"].push_back(s);
     std::ofstream f(g_DataDir + "/settings.json");
     if (f.is_open()) f << j.dump(2);
 }
@@ -332,11 +372,14 @@ static void AddonRender() {
         if (g_SelectedId != 0 && g_OwnedQueryDecoId != g_SelectedId) {
             const RecipeResult* r = RecipeData::GetResult(g_SelectedId);
             if (r && !r->ingredients.empty()) {
-                std::vector<uint32_t> ids;
-                for (auto& ing : r->ingredients) if (ing.itemId > 0) ids.push_back(ing.itemId);
+                std::vector<uint32_t> ids, currencyIds;
+                for (auto& ing : r->ingredients) {
+                    if (ing.itemId     > 0) ids.push_back(ing.itemId);
+                    if (ing.currencyId > 0) currencyIds.push_back(ing.currencyId);
+                }
                 uint32_t selId = g_SelectedId;
                 g_OwnedQueryDecoId = selId;
-                if (!ids.empty()) QueryIngredientCounts(selId, ids);
+                if (!ids.empty() || !currencyIds.empty()) QueryIngredientCounts(selId, ids, currencyIds);
             }
         }
     }
@@ -378,8 +421,27 @@ static void AddonRender() {
             g_SearchBuf);
         g_NeedRebuild = false;
 
+        // Restore selection from previous session (first rebuild after load)
+        if (g_NeedRestoreSelection && g_SelectedId != 0) {
+            g_NeedRestoreSelection = false;
+            auto deco = DecorationData::FindByIdCopy(g_SelectedId);
+            if (deco) {
+                g_SelectedWikiSlug = deco->wikiSlug;
+                g_OwnedQueryDecoId = 0;
+                std::string slug = deco->wikiSlug.empty() ? deco->name : deco->wikiSlug;
+                std::replace(slug.begin(), slug.end(), ' ', '_');
+                WikiPreview::Request(g_SelectedId, slug, deco->iconUrl);
+                RecipeData::Request(g_SelectedId, deco->wikiSlug);
+            }
+            auto [gi, ii] = DecorationList::FindPosition(g_SelectedId);
+            if (gi >= 0) {
+                g_NeedScroll     = true;
+                g_ScrollTargetGi = gi;
+                g_ScrollTargetIi = ii;
+            }
+        }
         // Re-find scroll target after rebuild (group indices may shift)
-        if (g_SelectedId != 0 && g_NeedScroll) {
+        else if (g_SelectedId != 0 && g_NeedScroll) {
             auto [gi, ii] = DecorationList::FindPosition(g_SelectedId);
             if (gi >= 0) {
                 g_ScrollTargetGi = gi;
@@ -428,14 +490,17 @@ static void AddonRender() {
             const auto& grp = groups[gi];
 
             // Force-expand the target group when scrolling to it
-            bool forceOpen = g_NeedScroll && (gi == g_ScrollTargetGi);
-            if (forceOpen) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-
-            // Open by default on first render (ImGuiCond_Once respects user toggle after that)
-            else ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+            bool forceOpen   = g_NeedScroll && (gi == g_ScrollTargetGi);
+            bool wasCollapsed = g_CollapsedGroups.count(grp.header) > 0;
+            ImGui::SetNextItemOpen(forceOpen || !wasCollapsed, forceOpen ? ImGuiCond_Always : ImGuiCond_Once);
 
             std::string header = grp.header + " (" + std::to_string(grp.items.size()) + ")";
             bool open = ImGui::CollapsingHeader(header.c_str());
+
+            // Sync collapsed state and persist if changed
+            if (!open && !wasCollapsed) { g_CollapsedGroups.insert(grp.header); SaveSettings(); }
+            else if (open && wasCollapsed) { g_CollapsedGroups.erase(grp.header); SaveSettings(); }
+
             if (!open) continue;
 
             for (int ii = 0; ii < (int)grp.items.size(); ii++) {
@@ -472,6 +537,7 @@ static void AddonRender() {
                         WikiPreview::Request(item.id, slug, item.iconUrl);
                         RecipeData::Request(item.id, item.wikiSlug);
                     }
+                    SaveSettings();
                 }
                 if (selected) ImGui::PopStyleColor(2);
                 // Render icon and text on top of the selectable row
@@ -498,9 +564,13 @@ static void AddonRender() {
 
         const auto& groups = DecorationList::GetGroups();
         for (auto& grp : groups) {
-            ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+            bool wasCollapsed = g_CollapsedGroups.count(grp.header) > 0;
+            ImGui::SetNextItemOpen(!wasCollapsed, ImGuiCond_Once);
             std::string header = grp.header + " (" + std::to_string(grp.items.size()) + ")";
-            if (!ImGui::CollapsingHeader(header.c_str())) continue;
+            bool open = ImGui::CollapsingHeader(header.c_str());
+            if (!open && !wasCollapsed) { g_CollapsedGroups.insert(grp.header); SaveSettings(); }
+            else if (open && wasCollapsed) { g_CollapsedGroups.erase(grp.header); SaveSettings(); }
+            if (!open) continue;
 
             int col = 0;
             for (auto& item : grp.items) {
@@ -542,6 +612,7 @@ static void AddonRender() {
                     }
                     WikiPreview::Request(item.id, slug, item.iconUrl);
                     RecipeData::Request(item.id, item.wikiSlug);
+                    SaveSettings();
                 }
 
                 col = (col + 1) % perRow;
@@ -654,8 +725,13 @@ static void AddonRender() {
                             int32_t owned = 0;
                             {
                                 std::lock_guard<std::mutex> lk(g_OwnedMutex);
-                                auto it = g_OwnedCounts.find(ing.itemId);
-                                if (it != g_OwnedCounts.end()) owned = it->second;
+                                if (ing.currencyId > 0) {
+                                    auto it = g_WalletCounts.find(ing.currencyId);
+                                    if (it != g_WalletCounts.end()) owned = it->second;
+                                } else {
+                                    auto it = g_OwnedCounts.find(ing.itemId);
+                                    if (it != g_OwnedCounts.end()) owned = it->second;
+                                }
                             }
                             bool enough = (owned >= ing.count);
                             if (enough)
@@ -734,7 +810,8 @@ void AddonLoad(AddonAPI_t* aApi) {
     // Hoard & Seek integration — subscribe before pinging so pong is delivered
     APIDefs->Events_Subscribe(EV_HOARD_PONG,         OnHoardPong);
     APIDefs->Events_Subscribe(EV_HOARD_DATA_UPDATED, OnHoardDataUpdated);
-    APIDefs->Events_Subscribe("EV_THG_OWNED_RESPONSE", OnOwnedResponse);
+    APIDefs->Events_Subscribe("EV_THG_OWNED_RESPONSE",  OnOwnedResponse);
+    APIDefs->Events_Subscribe("EV_THG_WALLET_RESPONSE", OnWalletResponse);
     THG_LOG(LOGL_INFO, "Pinging Hoard & Seek...");
     APIDefs->Events_Raise(EV_HOARD_PING, nullptr);
     THG_LOGF(LOGL_INFO, "H&S ping done — state after ping: %d (0=absent,1=pending,2=denied,3=ready)",
@@ -744,7 +821,8 @@ void AddonLoad(AddonAPI_t* aApi) {
 void AddonUnload() {
     SaveSettings();
     if (g_ShowQAIcon) APIDefs->QuickAccess_Remove(QA_ID);
-    APIDefs->Events_Unsubscribe("EV_THG_OWNED_RESPONSE", OnOwnedResponse);
+    APIDefs->Events_Unsubscribe("EV_THG_WALLET_RESPONSE", OnWalletResponse);
+    APIDefs->Events_Unsubscribe("EV_THG_OWNED_RESPONSE",  OnOwnedResponse);
     APIDefs->Events_Unsubscribe(EV_HOARD_DATA_UPDATED,   OnHoardDataUpdated);
     APIDefs->Events_Unsubscribe(EV_HOARD_PONG,           OnHoardPong);
     HandiworkHook::Shutdown();

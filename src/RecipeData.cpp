@@ -273,9 +273,10 @@ bool RecipeData::FetchAndCache(uint32_t decoId, const std::string& wikiSlug, Rec
             out.recipeId = j.value("recipe_id", 0u);
             for (auto& ing : j["ingredients"]) {
                 Ingredient i;
-                i.itemId = ing.value("item_id", 0u);
-                i.count  = ing.value("count", 0);
-                i.name   = ing.value("name", "");
+                i.itemId     = ing.value("item_id",     0u);
+                i.currencyId = ing.value("currency_id", 0u);
+                i.count      = ing.value("count",        0);
+                i.name       = ing.value("name",        "");
                 out.ingredients.push_back(i);
             }
             return true;
@@ -381,27 +382,32 @@ bool RecipeData::FetchAndCache(uint32_t decoId, const std::string& wikiSlug, Rec
         auto extResp = HttpClient::Get(
             "https://wiki.guildwars2.com/api.php?action=query&titles=" + titles + "&prop=extlinks&format=json");
 
-        // name → itemId (normalized page title == ingredient display name)
+        // name → itemId / currencyId (normalized page title == ingredient display name)
         std::unordered_map<std::string, uint32_t> nameToItemId;
+        std::unordered_map<std::string, uint32_t> nameToCurrencyId;
         if (!extResp.empty()) {
             try {
                 auto j = nlohmann::json::parse(extResp);
-                static const std::string kItemPrefix = "https://api.guildwars2.com/v2/items?ids=";
+                static const std::string kItemPrefix     = "https://api.guildwars2.com/v2/items?ids=";
+                static const std::string kCurrencyPrefix = "https://api.guildwars2.com/v2/currencies?ids=";
                 for (auto& [pageId, page] : j["query"]["pages"].items()) {
                     if (!page.contains("extlinks")) continue;
                     std::string pageTitle2 = page["title"].get<std::string>();
                     for (auto& link : page["extlinks"]) {
                         std::string url = link["*"].get<std::string>();
-                        if (url.find(kItemPrefix) == 0) {
-                            size_t idStart = kItemPrefix.size();
+                        auto tryParse = [&](const std::string& prefix, std::unordered_map<std::string, uint32_t>& map) {
+                            if (url.find(prefix) != 0) return false;
+                            size_t idStart = prefix.size();
                             auto idEnd = url.find_first_of("&?", idStart);
                             try {
                                 uint32_t id = (uint32_t)std::stoul(
                                     url.substr(idStart, idEnd == std::string::npos ? std::string::npos : idEnd - idStart));
-                                nameToItemId[pageTitle2] = id;
+                                map[pageTitle2] = id;
                             } catch (...) {}
-                            break;
-                        }
+                            return true;
+                        };
+                        if (tryParse(kItemPrefix, nameToItemId))     break;
+                        if (tryParse(kCurrencyPrefix, nameToCurrencyId)) break;
                     }
                 }
             } catch (...) {}
@@ -409,9 +415,10 @@ bool RecipeData::FetchAndCache(uint32_t decoId, const std::string& wikiSlug, Rec
 
         for (auto& raw : rawIngreds) {
             Ingredient ing;
-            ing.count  = raw.count;
-            ing.name   = raw.name;
-            ing.itemId = nameToItemId.count(raw.name) ? nameToItemId[raw.name] : 0;
+            ing.count      = raw.count;
+            ing.name       = raw.name;
+            ing.itemId     = nameToItemId.count(raw.name)     ? nameToItemId[raw.name]     : 0;
+            ing.currencyId = nameToCurrencyId.count(raw.name) ? nameToCurrencyId[raw.name] : 0;
             out.ingredients.push_back(ing);
         }
     }
@@ -422,7 +429,7 @@ bool RecipeData::FetchAndCache(uint32_t decoId, const std::string& wikiSlug, Rec
         jOut["recipe_id"]   = out.recipeId;
         jOut["ingredients"] = nlohmann::json::array();
         for (auto& ing : out.ingredients)
-            jOut["ingredients"].push_back({{"item_id", ing.itemId}, {"count", ing.count}, {"name", ing.name}});
+            jOut["ingredients"].push_back({{"item_id", ing.itemId}, {"currency_id", ing.currencyId}, {"count", ing.count}, {"name", ing.name}});
         std::ofstream f(cachePath);
         f << jOut.dump();
     } catch (...) {}

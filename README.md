@@ -50,7 +50,7 @@ Configurable in Nexus keybind settings.
 | Default | Action |
 |---|---|
 | `Ctrl+Shift+P` | Toggle window |
-| `Ctrl+Shift+H` | Identify hovered Handiwork item (press Ctrl+C when prompted) |
+| `Ctrl+Shift+H` | Open currently hovered Handiwork recipe in addon |
 
 ## Building
 

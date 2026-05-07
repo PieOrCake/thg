@@ -11,8 +11,9 @@
 namespace TyrianHomeAndGarden {
 
 struct Ingredient {
-    uint32_t itemId = 0;   // GW2 item ID (0 if unknown)
-    int      count  = 0;
+    uint32_t itemId     = 0;  // GW2 item ID (0 if currency or unknown)
+    uint32_t currencyId = 0;  // GW2 currency ID (0 if not a currency)
+    int      count      = 0;
     std::string name;
 };
 
