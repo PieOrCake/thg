@@ -5,7 +5,7 @@
 #include <fstream>
 #include <algorithm>
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
 AddonAPI_t*       MetadataScraper::s_api     = nullptr;
 std::string       MetadataScraper::s_dataDir;
@@ -214,15 +214,16 @@ MetaMap MetadataScraper::ScrapeWiki() {
         std::string name = ExtractName(html, divPos);
         if (name.empty()) { pos = divPos + kPrefix.size(); continue; }
 
-        // Match by name against loaded decoration data
-        const Decoration* d = DecorationData::FindByName(name);
-        if (!d) { pos = divPos + kPrefix.size(); continue; }
+        // Match by name against loaded decoration data — use ID copy to avoid holding
+        // a raw pointer into s_decorations across a mutex release.
+        uint32_t decorId = DecorationData::FindIdByName(name);
+        if (decorId == 0) { pos = divPos + kPrefix.size(); continue; }
 
         // Derive wikiSlug from decoration name (decoration page, not Handiwork recipe page)
         std::string slug = name;
         std::replace(slug.begin(), slug.end(), ' ', '_');
 
-        result[d->id] = {
+        result[decorId] = {
             ClassesToCategory(classes),
             ClassesToHandiwork(classes),
             ClassesToExpansion(classes),
@@ -275,6 +276,13 @@ void MetadataScraper::WorkerThread() {
     std::string liveRev = CheckNeedsUpdate();
     if (liveRev.empty() || !s_running) return;
 
+    // Wait for the GW2 API decoration list to be loaded before scraping.
+    // On fresh install both threads race; if ScrapeWiki wins, FindIdByName
+    // matches nothing and the entire scrape result is discarded.
+    while (s_running && !DecorationData::IsApiLoaded())
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (!s_running) return;
+
     auto meta = ScrapeWiki();
     if (meta.empty() || !s_running) return;
 
@@ -283,4 +291,4 @@ void MetadataScraper::WorkerThread() {
     DecorationData::MergeMetadata(meta);
 }
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden

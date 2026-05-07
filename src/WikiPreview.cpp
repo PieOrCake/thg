@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <chrono>
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
 AddonAPI_t*             WikiPreview::s_api     = nullptr;
 std::string             WikiPreview::s_dataDir;
@@ -109,7 +109,7 @@ void WikiPreview::Tick() {
         batch.swap(s_ready);
     }
     for (auto& item : batch) {
-        std::string texId = "PT_WIKI_" + std::to_string(item.id);
+        std::string texId = "THG_WIKI_" + std::to_string(item.id);
         {
             std::lock_guard<std::mutex> pl(s_pendingMutex);
             s_pendingIds[texId] = item.id;
@@ -204,4 +204,4 @@ void WikiPreview::WorkerThread() {
     }
 }
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden

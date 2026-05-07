@@ -5,7 +5,7 @@ set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
 set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
 set(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)
 
-project(PlotTwist)
+project(TyrianHomeAndGarden)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,20 +39,22 @@ set(SOURCES
     src/MetadataScraper.cpp
     src/DecorationList.cpp
     src/WikiPreview.cpp
+    src/IconCache.cpp
     src/HandiworkHook.cpp
+    src/RecipeData.cpp
     ${IMGUI_SOURCES}
 )
 
-add_library(PlotTwist SHARED ${SOURCES})
+add_library(TyrianHomeAndGarden SHARED ${SOURCES})
 
-set_target_properties(PlotTwist PROPERTIES SUFFIX ".dll" PREFIX "")
+set_target_properties(TyrianHomeAndGarden PROPERTIES SUFFIX ".dll" PREFIX "")
 
-target_link_libraries(PlotTwist gdi32 wininet shell32)
+target_link_libraries(TyrianHomeAndGarden gdi32 wininet shell32)
 
-target_link_options(PlotTwist PRIVATE -Wl,--out-implib,PlotTwist.lib -Wl,--strip-all)
-target_sources(PlotTwist PRIVATE ${CMAKE_SOURCE_DIR}/PlotTwist.def)
+target_link_options(TyrianHomeAndGarden PRIVATE -Wl,--out-implib,TyrianHomeAndGarden.lib -Wl,--strip-all)
+target_sources(TyrianHomeAndGarden PRIVATE ${CMAKE_SOURCE_DIR}/TyrianHomeAndGarden.def)
 
-set_target_properties(PlotTwist PROPERTIES
+set_target_properties(TyrianHomeAndGarden PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )

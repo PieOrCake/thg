@@ -1,0 +1,6 @@
+build/
+HANDOVER.md
+CLAUDE.md
+docs/
+.superpowers/
+*.lib

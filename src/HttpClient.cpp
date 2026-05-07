@@ -5,10 +5,10 @@
 #include <fstream>
 #include <vector>
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
     std::string HttpClient::Get(const std::string& url) {
-        HINTERNET hInternet = InternetOpenA("PlotTwist/1.0",
+        HINTERNET hInternet = InternetOpenA("TyrianHomeAndGarden/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return "";
 
@@ -35,7 +35,7 @@ namespace PlotTwist {
 
     HttpResponse HttpClient::GetEx(const std::string& url) {
         HttpResponse result;
-        HINTERNET hInternet = InternetOpenA("PlotTwist/1.0",
+        HINTERNET hInternet = InternetOpenA("TyrianHomeAndGarden/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return result;
 
@@ -66,7 +66,7 @@ namespace PlotTwist {
     }
 
     bool HttpClient::DownloadToFile(const std::string& url, const std::string& destPath) {
-        HINTERNET hInternet = InternetOpenA("PlotTwist/1.0",
+        HINTERNET hInternet = InternetOpenA("TyrianHomeAndGarden/1.0",
             INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hInternet) return false;
 

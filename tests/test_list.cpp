@@ -15,7 +15,7 @@ struct Texture_t { void* Resource; };
 #include <cassert>
 #include <iostream>
 
-using namespace PlotTwist;
+using namespace TyrianHomeAndGarden;
 
 static Decoration make(uint32_t id, const char* name, const char* cat,
                        const char* hw, const char* exp) {

@@ -3,7 +3,7 @@
 #include <atomic>
 #include "nexus/Nexus.h"
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
 class HandiworkHook {
 public:
@@ -19,15 +19,12 @@ public:
     static std::atomic<uint32_t> s_pendingSelectionId;
 
 private:
-    static std::string  SaveClipboard();
-    static void         RestoreClipboard(const std::string& content);
-    static void         SimulateCtrlClick();
-    static std::string  PollClipboard(const std::string& original, int maxMs);
-    static uint32_t     DecodeChatLink(const std::string& chatLink);
-    static uint32_t     ResolveItemIdToDecorationId(uint32_t itemId);
+    static std::string SaveClipboard();
+    static void        RestoreClipboard(const std::string& content);
+    static std::string PollClipboard(const std::string& original, int maxMs);
 
     static AddonAPI_t*        s_api;
     static std::atomic<bool>  s_threadActive;
 };
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden

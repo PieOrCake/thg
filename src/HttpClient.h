@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
 struct HttpResponse {
     int         status_code = 0;
@@ -15,4 +15,4 @@ public:
     static bool         DownloadToFile(const std::string& url, const std::string& destPath);
 };
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden

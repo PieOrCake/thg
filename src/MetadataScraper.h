@@ -6,7 +6,7 @@
 #include <thread>
 #include "nexus/Nexus.h"
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
 using MetaMap = std::unordered_map<uint32_t,
     std::tuple<std::string,std::string,std::string,std::string>>;
@@ -33,4 +33,4 @@ private:
     static std::thread       s_thread;
 };
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden

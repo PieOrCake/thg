@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cctype>
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
 std::vector<DecorationGroup> DecorationList::s_groups;
 
@@ -94,4 +94,4 @@ std::pair<int,int> DecorationList::FindPosition(uint32_t id) {
     return {-1, -1};
 }
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden

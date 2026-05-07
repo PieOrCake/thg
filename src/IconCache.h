@@ -10,25 +10,20 @@
 
 namespace TyrianHomeAndGarden {
 
-class WikiPreview {
+class IconCache {
 public:
     static void Initialize(AddonAPI_t* api, const std::string& dataDir);
     static void Shutdown();
     static void Tick(); // call every frame on render thread
 
-    static void      Request(uint32_t id, const std::string& wikiSlug, const std::string& fallbackIconUrl = "");
+    static void       Request(uint32_t id, const std::string& iconUrl);
     static Texture_t* GetTexture(uint32_t id);
-    static bool       IsLoading(uint32_t id);
 
 private:
     static void WorkerThread();
-    static std::string FetchImageUrl(const std::string& wikiSlug);
-    static bool        DownloadImage(const std::string& url, const std::string& destPath);
-
-    // Callback invoked by Nexus on the render thread when a texture is ready
     static void OnTextureLoaded(const char* identifier, Texture_t* texture);
 
-    struct QueueItem { uint32_t id; std::string wikiSlug; std::string fallbackIconUrl; };
+    struct QueueItem { uint32_t id; std::string iconUrl; };
     struct ReadyItem { uint32_t id; std::string filePath; };
 
     static AddonAPI_t*              s_api;
@@ -48,9 +43,8 @@ private:
     static std::unordered_map<uint32_t, bool>        s_loading;
     static std::unordered_map<uint32_t, int64_t>     s_failTime;
 
-    // Maps texture identifier string back to item id for the callback
-    static std::mutex                                    s_pendingMutex;
-    static std::unordered_map<std::string, uint32_t>     s_pendingIds;
+    static std::mutex                                s_pendingMutex;
+    static std::unordered_map<std::string, uint32_t> s_pendingIds;
 };
 
 } // namespace TyrianHomeAndGarden

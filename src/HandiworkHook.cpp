@@ -1,13 +1,41 @@
 #include "HandiworkHook.h"
 #include "DecorationData.h"
-#include "HttpClient.h"
-#include <nlohmann/json.hpp>
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <string>
 #include <windows.h>
 
-namespace PlotTwist {
+#define PT_LOG(msg) do { if (HandiworkHook::s_api) HandiworkHook::s_api->Log(LOGL_DEBUG, "TyrianHomeAndGarden/Hook", (msg)); } while(0)
+
+namespace TyrianHomeAndGarden {
+
+// Minimal GW2 MumbleLink layout. uiState bit 5 (0x20) = chat textbox focused.
+#pragma pack(push, 1)
+struct MumbleContext_t {
+    uint8_t  serverAddress[28];
+    uint32_t mapId;
+    uint32_t mapType;
+    uint32_t shardId;
+    uint32_t instance;
+    uint32_t buildId;
+    uint32_t uiState;
+};
+struct LinkedMem_t {
+    uint32_t        uiVersion;
+    uint32_t        uiTick;
+    float           fAvatarPosition[3];
+    float           fAvatarFront[3];
+    float           fAvatarTop[3];
+    wchar_t         name[256];
+    float           fCameraPosition[3];
+    float           fCameraFront[3];
+    float           fCameraTop[3];
+    wchar_t         identity[256];
+    uint32_t        context_len;
+    MumbleContext_t context;
+};
+#pragma pack(pop)
 
 AddonAPI_t*           HandiworkHook::s_api = nullptr;
 std::atomic<uint32_t> HandiworkHook::s_pendingSelectionId{0};
@@ -16,12 +44,17 @@ std::atomic<bool>     HandiworkHook::s_threadActive{false};
 void HandiworkHook::Initialize(AddonAPI_t* api) { s_api = api; }
 
 void HandiworkHook::Shutdown() {
-    // Wait up to 600ms for any in-flight detached thread to finish
     int waited = 0;
     while (s_threadActive.load() && waited < 600) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         waited += 10;
     }
+}
+
+static bool IsTextboxFocused(AddonAPI_t* api) {
+    if (!api) return false;
+    auto* mem = static_cast<LinkedMem_t*>(api->DataLink_Get(DL_MUMBLE_LINK));
+    return mem && (mem->context.uiState & 0x20) != 0;
 }
 
 std::string HandiworkHook::SaveClipboard() {
@@ -59,24 +92,6 @@ void HandiworkHook::RestoreClipboard(const std::string& content) {
     CloseClipboard();
 }
 
-void HandiworkHook::SimulateCtrlClick() {
-    INPUT inputs[4] = {};
-    // Ctrl down
-    inputs[0].type = INPUT_KEYBOARD;
-    inputs[0].ki.wVk = VK_CONTROL;
-    // Left mouse button down
-    inputs[1].type = INPUT_MOUSE;
-    inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-    // Left mouse button up
-    inputs[2].type = INPUT_MOUSE;
-    inputs[2].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-    // Ctrl up
-    inputs[3].type = INPUT_KEYBOARD;
-    inputs[3].ki.wVk = VK_CONTROL;
-    inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
-    SendInput(4, inputs, sizeof(INPUT));
-}
-
 std::string HandiworkHook::PollClipboard(const std::string& original, int maxMs) {
     int elapsed = 0;
     while (elapsed < maxMs) {
@@ -88,88 +103,222 @@ std::string HandiworkHook::PollClipboard(const std::string& original, int maxMs)
     return {};
 }
 
-// Base64 decode helper
+static void SendKey(WORD vk, bool up = false) {
+    INPUT inp = {};
+    inp.type = INPUT_KEYBOARD;
+    inp.ki.wVk = vk;
+    if (up) inp.ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(1, &inp, sizeof(INPUT));
+}
+
+// Send a key using a hardware scan code instead of a virtual key.
+// Scan-code events travel through the kernel HID path and may be visible to
+// DirectInput, unlike virtual-key SendInput events which only reach Win32.
+static void SendScanKey(WORD scan, bool up = false) {
+    INPUT inp = {};
+    inp.type       = INPUT_KEYBOARD;
+    inp.ki.wScan   = scan;
+    inp.ki.dwFlags = KEYEVENTF_SCANCODE | (up ? KEYEVENTF_KEYUP : 0);
+    SendInput(1, &inp, sizeof(INPUT));
+}
+
+// Attempt Ctrl+A then Ctrl+C via scan codes.
+static void TryCopyChatInputScanCode() {
+    // Ctrl+A (select all)
+    SendScanKey(0x1D);        // Left Ctrl down
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    SendScanKey(0x1E);        // A down
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    SendScanKey(0x1E, true);  // A up
+    SendScanKey(0x1D, true);  // Left Ctrl up
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Ctrl+C (copy)
+    SendScanKey(0x1D);        // Left Ctrl down
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    SendScanKey(0x2E);        // C down
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    SendScanKey(0x2E, true);  // C up
+    SendScanKey(0x1D, true);  // Left Ctrl up
+}
+
+static void WaitForModifiersReleased(int timeoutMs = 2000) {
+    int elapsed = 0;
+    while (elapsed < timeoutMs) {
+        if (!(GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
+            !(GetAsyncKeyState(VK_SHIFT)   & 0x8000) &&
+            !(GetAsyncKeyState(VK_MENU)    & 0x8000)) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        elapsed += 10;
+    }
+}
+
+// Shift+Click sequence matching item_detail_popups / enigo timing:
+// Shift down → sleep → click → sleep (post_key_combination_delay) → Shift up.
+// Sending them atomically in one SendInput batch is NOT enough — GW2 needs
+// time between the Shift press and the click to register the modifier state.
+static void SimulateShiftClick() {
+    SendKey(VK_SHIFT);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    INPUT clicks[2] = {};
+    clicks[0].type = INPUT_MOUSE; clicks[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    clicks[1].type = INPUT_MOUSE; clicks[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    SendInput(2, clicks, sizeof(INPUT));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // post-click delay
+    SendKey(VK_SHIFT, true);
+}
+
+
+// Decode standard base64 to bytes.
 static std::vector<uint8_t> Base64Decode(const std::string& encoded) {
-    static const std::string chars =
+    static const std::string alpha =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::vector<uint8_t> result;
-    int val = 0, valb = -8;
+    int val = 0, bits = -8;
     for (unsigned char c : encoded) {
         if (c == '=') break;
-        auto pos = chars.find(c);
+        auto pos = alpha.find(c);
         if (pos == std::string::npos) continue;
-        val = (val << 6) + (int)pos;
-        valb += 6;
-        if (valb >= 0) {
-            result.push_back((val >> valb) & 0xFF);
-            valb -= 8;
+        val = (val << 6) | (int)pos;
+        bits += 6;
+        if (bits >= 0) {
+            result.push_back((val >> bits) & 0xFF);
+            bits -= 8;
         }
     }
     return result;
 }
 
-uint32_t HandiworkHook::DecodeChatLink(const std::string& link) {
-    // Expected format: [&BASE64]
-    if (link.size() < 5) return 0;
-    if (link.front() != '[' || link[1] != '&') return 0;
-    auto end = link.rfind(']');
-    if (end == std::string::npos || end <= 2) return 0;
-
-    auto bytes = Base64Decode(link.substr(2, end - 2));
-    if (bytes.size() < 4) return 0;
-    if (bytes[0] != 0x02) return 0; // not an item link
-
-    // Item ID: bytes 2-4 as uint24 little-endian (covers IDs up to 16.7M)
-    uint32_t itemId = (uint32_t)bytes[2]
-                    | ((uint32_t)bytes[3] << 8)
-                    | ((uint32_t)(bytes.size() > 4 ? bytes[4] : 0) << 16);
-    return itemId;
+static uint32_t ParseChatLinkId(const std::string& text) {
+    auto s = text.find("[&");
+    if (s == std::string::npos) return 0;
+    auto e = text.find(']', s + 2);
+    if (e == std::string::npos || e <= s + 2) return 0;
+    auto bytes = Base64Decode(text.substr(s + 2, e - s - 2));
+    if (bytes.size() < 5) return 0;
+    return (uint32_t)bytes[1]
+         | ((uint32_t)bytes[2] << 8)
+         | ((uint32_t)bytes[3] << 16)
+         | ((uint32_t)bytes[4] << 24);
 }
 
-uint32_t HandiworkHook::ResolveItemIdToDecorationId(uint32_t itemId) {
-    // Fetch item name from GW2 API, then match against decoration list by name.
-    try {
-        auto resp = HttpClient::Get(
-            "https://api.guildwars2.com/v2/items/" + std::to_string(itemId));
-        if (resp.empty()) return 0;
-        auto j = nlohmann::json::parse(resp);
-        std::string name = j.value("name", "");
-        if (name.empty()) return 0;
-        const Decoration* d = DecorationData::FindByName(name);
-        return d ? d->id : 0;
-    } catch (...) { return 0; }
+static std::string ParseItemName(const std::string& text) {
+    auto s = text.find('[');
+    if (s == std::string::npos) return {};
+    auto e = text.find(']', s + 1);
+    if (e == std::string::npos || e <= s + 1) return {};
+    if (text[s + 1] == '&') return {};
+    std::string name = text.substr(s + 1, e - s - 1);
+    while (!name.empty() && name.front() == ' ') name.erase(name.begin());
+    while (!name.empty() && name.back()  == ' ') name.pop_back();
+    const std::string prefix = "Recipe: ";
+    if (name.size() > prefix.size() && name.substr(0, prefix.size()) == prefix)
+        name = name.substr(prefix.size());
+    return name;
 }
 
 void HandiworkHook::TriggerHook() {
     std::thread([]() {
         s_threadActive = true;
+        PT_LOG("TriggerHook: thread started");
+
+        WaitForModifiersReleased(2000);
+        PT_LOG("TriggerHook: modifiers released");
 
         std::string original = SaveClipboard();
-        SimulateCtrlClick();
-        std::string chatLink = PollClipboard(original, 500);
+        PT_LOG(("TriggerHook: clipboard saved, len=" + std::to_string(original.size())).c_str());
 
-        if (chatLink.empty()) { RestoreClipboard(original); s_threadActive = false; return; }
-        if (chatLink.find("[&") == std::string::npos) {
-            RestoreClipboard(original); s_threadActive = false; return;
+        // Try Shift+Click up to twice, checking MumbleLink for textbox focus
+        // after each attempt — same retry logic as item_detail_popups.
+        bool chatOpen = false;
+        for (int attempt = 0; attempt < 2 && !chatOpen; attempt++) {
+            if (attempt > 0) {
+                PT_LOG("TriggerHook: retrying Shift+Click");
+                std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            }
+            SimulateShiftClick();
+            PT_LOG(("TriggerHook: Shift+Click sent (attempt " + std::to_string(attempt + 1) + ")").c_str());
+
+            // Wait up to 1 second for the chat textbox to open.
+            for (int w = 0; w < 20 && !chatOpen; w++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                chatOpen = IsTextboxFocused(s_api);
+            }
         }
 
-        // Extract just the [&...] portion if surrounded by other text
-        auto linkStart = chatLink.find("[&");
-        auto linkEnd   = chatLink.find(']', linkStart);
-        if (linkStart == std::string::npos || linkEnd == std::string::npos) {
-            RestoreClipboard(original); s_threadActive = false; return;
-        }
-        chatLink = chatLink.substr(linkStart, linkEnd - linkStart + 1);
+        PT_LOG(chatOpen ? "TriggerHook: textbox focused (chat opened)"
+                        : "TriggerHook: WARNING - textbox not focused; proceeding anyway");
 
-        uint32_t itemId = DecodeChatLink(chatLink);
+        if (!chatOpen) {
+            PT_LOG("TriggerHook: ABORT - chat did not open");
+            s_threadActive = false;
+            return;
+        }
+
+        // Give GW2 a moment to fully route keyboard input to the chat textbox.
+        // MumbleLink bit may be set slightly before keyboard focus is live.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Attempt Ctrl+A + Ctrl+C via hardware scan codes.
+        // Scan-code events travel through the kernel HID path and may reach
+        // DirectInput, unlike virtual-key or WM_CHAR approaches which don't.
+        PT_LOG("TriggerHook: trying scan-code Ctrl+A + Ctrl+C");
+        TryCopyChatInputScanCode();
+
+        std::string clipText = PollClipboard(original, 1000);
+        PT_LOG(("TriggerHook: clipboard result, len=" + std::to_string(clipText.size()) + " content='" + clipText + "'").c_str());
+
+        // Clear chat text (Ctrl+A then Backspace via scan codes), then close
+        // with Escape via WndProc_SendToGameOnly. Plain SendInput/scan-code
+        // Escape is intercepted by Nexus's close-on-escape handler and closes
+        // the addon window; WndProc_SendToGameOnly bypasses all Nexus hooks.
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        SendScanKey(0x1D);       // Ctrl down
+        SendScanKey(0x1E);       // A down
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        SendScanKey(0x1E, true); // A up
+        SendScanKey(0x1D, true); // Ctrl up
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        SendScanKey(0x0E);       // Backspace (clears selected text)
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        SendScanKey(0x1C);       // Enter (submits empty chat, closes box; no Nexus handler)
+
         RestoreClipboard(original);
+        PT_LOG("TriggerHook: clipboard restored");
 
-        if (itemId == 0) { s_threadActive = false; return; }
+        if (clipText.empty()) {
+            PT_LOG("TriggerHook: ABORT - clipboard unchanged (Shift+Click had no effect or chat was empty)");
+            s_threadActive = false;
+            return;
+        }
 
-        uint32_t decoId = ResolveItemIdToDecorationId(itemId);
-        if (decoId != 0) s_pendingSelectionId = decoId;
+        // Accept [&base64] links (Handiwork items) and plain [Item Name] (inventory items).
+        uint32_t decoId = 0;
+        std::string resolvedName;
+        if (clipText.find("[&") != std::string::npos) {
+            decoId = ParseChatLinkId(clipText);
+            resolvedName = "[chat link id=" + std::to_string(decoId) + "]";
+            PT_LOG(("TriggerHook: decoded chat link, decoId=" + std::to_string(decoId)).c_str());
+        } else {
+            resolvedName = ParseItemName(clipText);
+            PT_LOG(("TriggerHook: item name='" + resolvedName + "'").c_str());
+            if (!resolvedName.empty()) decoId = DecorationData::FindIdByName(resolvedName);
+        }
+
+        if (decoId == 0 || !DecorationData::FindByIdCopy(decoId)) {
+            PT_LOG(("TriggerHook: ABORT - could not resolve decoration: '" + resolvedName + "'").c_str());
+            if (s_api) s_api->GUI_SendAlert(("Not found: " + resolvedName).c_str());
+            s_threadActive = false;
+            return;
+        }
+
+        s_pendingSelectionId = decoId;
+        PT_LOG("TriggerHook: pendingSelectionId set, window will open next frame");
         s_threadActive = false;
+        PT_LOG("TriggerHook: thread done");
     }).detach();
 }
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden

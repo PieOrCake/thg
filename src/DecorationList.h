@@ -3,7 +3,7 @@
 #include <vector>
 #include "DecorationData.h"
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
 enum class GroupBy { Type = 0, Handiwork = 1, Expansion = 2 };
 
@@ -30,4 +30,4 @@ private:
     static std::vector<DecorationGroup> s_groups;
 };
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden

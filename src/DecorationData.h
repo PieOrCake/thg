@@ -9,7 +9,7 @@
 #include <thread>
 #include "nexus/Nexus.h"
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
 struct Decoration {
     uint32_t    id            = 0;
@@ -19,6 +19,7 @@ struct Decoration {
     std::string handiworkLevel;
     std::string expansion;
     std::string wikiSlug;
+    uint32_t    recipe_id     = 0;  // 0 if not craftable via Handiwork
 };
 
 class DecorationData {
@@ -30,6 +31,7 @@ public:
     static const Decoration*         FindById(uint32_t id);
     static std::optional<Decoration> FindByIdCopy(uint32_t id);
     static const Decoration*         FindByName(const std::string& name);
+    static uint32_t                  FindIdByName(const std::string& name); // safe: returns copy of ID
     static bool                      IsApiLoaded();
 
     // Called by MetadataScraper when wiki data is ready.
@@ -58,4 +60,4 @@ private:
     static std::thread                         s_thread;
 };
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden

@@ -10,17 +10,18 @@ static std::string StripGW2Markup(const std::string& s) {
     result.reserve(s.size());
     bool inTag = false;
     for (char c : s) {
+        if (c == '\n') break;          // stop at embedded description/subtext
         if (c == '<') { inTag = true;  continue; }
         if (c == '>') { inTag = false; continue; }
         if (!inTag) result += c;
     }
-    size_t start = result.find_first_not_of(" \t\n\r");
+    size_t start = result.find_first_not_of(" \t\r");
     if (start == std::string::npos) return {};
-    size_t end = result.find_last_not_of(" \t\n\r");
+    size_t end = result.find_last_not_of(" \t\r");
     return result.substr(start, end - start + 1);
 }
 
-namespace PlotTwist {
+namespace TyrianHomeAndGarden {
 
 std::vector<Decoration>             DecorationData::s_decorations;
 std::unordered_map<uint32_t,size_t> DecorationData::s_idIndex;
@@ -70,6 +71,14 @@ const Decoration* DecorationData::FindByName(const std::string& name) {
         if (d.name == name) return &d;
     }
     return nullptr;
+}
+
+uint32_t DecorationData::FindIdByName(const std::string& name) {
+    std::lock_guard<std::mutex> lock(s_mutex);
+    for (auto& d : s_decorations) {
+        if (d.name == name) return d.id;
+    }
+    return 0;
 }
 
 bool DecorationData::IsApiLoaded() { return s_apiLoaded; }
@@ -163,9 +172,10 @@ void DecorationData::FetchThread() {
             auto items = nlohmann::json::parse(batchResp);
             for (auto& item : items) {
                 Decoration d;
-                d.id      = item["id"].get<uint32_t>();
-                d.name    = item.value("name", "");
-                d.iconUrl = item.value("icon", "");
+                d.id        = item["id"].get<uint32_t>();
+                d.name      = item.value("name", "");
+                d.iconUrl   = item.value("icon", "");
+                d.recipe_id = item.value("recipe_id", 0u);
                 d.name = StripGW2Markup(d.name);
                 if (d.name.empty()) continue;
                 fetched.push_back(std::move(d));
@@ -179,6 +189,20 @@ void DecorationData::FetchThread() {
 
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            // Preserve any metadata already merged into the old decorations.
+            // Without this, the live fetch overwrites s_decorations and loses all
+            // category/handiworkLevel/expansion/wikiSlug data that MetadataScraper
+            // applied earlier, causing everything to group under "Other".
+            for (auto& d : fetched) {
+                auto it = s_idIndex.find(d.id);
+                if (it != s_idIndex.end()) {
+                    const auto& old = s_decorations[it->second];
+                    d.category       = old.category;
+                    d.handiworkLevel = old.handiworkLevel;
+                    d.expansion      = old.expansion;
+                    d.wikiSlug       = old.wikiSlug;
+                }
+            }
             s_decorations = std::move(fetched);
             s_idIndex.clear();
             for (size_t i = 0; i < s_decorations.size(); i++)
@@ -191,4 +215,4 @@ void DecorationData::FetchThread() {
     } catch (...) {}
 }
 
-} // namespace PlotTwist
+} // namespace TyrianHomeAndGarden
