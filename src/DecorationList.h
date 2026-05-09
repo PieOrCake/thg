@@ -15,8 +15,10 @@ struct DecorationGroup {
 class DecorationList {
 public:
     // Rebuilds the grouped list from scratch. Filter is case-insensitive substring match on name.
+    // Pinned items are excluded from normal groups and prepended as a synthetic "Pinned" group.
     static void Rebuild(const std::vector<Decoration>& all,
-                        GroupBy by, const std::string& filter);
+                        GroupBy by, const std::string& filter,
+                        const std::vector<uint32_t>& pinned);
 
     static const std::vector<DecorationGroup>& GetGroups();
 

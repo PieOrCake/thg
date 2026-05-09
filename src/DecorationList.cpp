@@ -1,7 +1,10 @@
 #include "DecorationList.h"
+#include "RecipeData.h"
 #include <map>
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace TyrianHomeAndGarden {
 
@@ -44,14 +47,20 @@ int DecorationList::SortWeight(const std::string& key, GroupBy by) {
 }
 
 void DecorationList::Rebuild(const std::vector<Decoration>& all,
-                              GroupBy by, const std::string& filter)
+                              GroupBy by, const std::string& filter,
+                              const std::vector<uint32_t>& pinned)
 {
+    std::unordered_set<uint32_t> pinnedSet(pinned.begin(), pinned.end());
     std::string lfilter = ToLower(filter);
     std::map<std::string, std::vector<Decoration>> buckets;
 
     for (auto& d : all) {
-        if (!lfilter.empty() && ToLower(d.name).find(lfilter) == std::string::npos)
-            continue;
+        if (pinnedSet.count(d.id)) continue; // handled separately in Pinned group
+        if (!lfilter.empty()) {
+            bool nameMatch = ToLower(d.name).find(lfilter) != std::string::npos;
+            if (!nameMatch && !RecipeData::DecoMatchesIngredient(d.id, lfilter))
+                continue;
+        }
         buckets[GetKey(d, by)].push_back(d);
     }
 
@@ -73,6 +82,20 @@ void DecorationList::Rebuild(const std::vector<Decoration>& all,
         });
 
     s_groups.clear();
+
+    // Prepend Pinned group, preserving insertion order, skipping IDs no longer in 'all'
+    if (!pinned.empty()) {
+        std::unordered_map<uint32_t, const Decoration*> byId;
+        for (auto& d : all) byId[d.id] = &d;
+        DecorationGroup pinGroup;
+        pinGroup.header = "Pinned";
+        for (auto id : pinned) {
+            auto it = byId.find(id);
+            if (it != byId.end()) pinGroup.items.push_back(*it->second);
+        }
+        if (!pinGroup.items.empty()) s_groups.push_back(std::move(pinGroup));
+    }
+
     for (auto& [key, items] : sorted) {
         DecorationGroup g;
         g.header = key;

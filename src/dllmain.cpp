@@ -27,7 +27,7 @@
 
 #define V_MAJOR    0
 #define V_MINOR    9
-#define V_BUILD    0
+#define V_BUILD    1
 #define V_REVISION 0
 
 #define KB_TOGGLE    "KB_THG_TOGGLE"
@@ -61,6 +61,7 @@ static int  g_ScrollTargetIi = -1;
 
 // --- Session persistence ---
 static std::unordered_set<std::string> g_CollapsedGroups; // group headers the user has collapsed
+static std::vector<uint32_t>           g_PinnedIds;        // decoration IDs in pin order
 static bool                            g_NeedRestoreSelection = false; // scroll + preview after first rebuild
 
 // --- Metadata load state ---
@@ -289,6 +290,9 @@ static void LoadSettings() {
         if (j.contains("collapsed_groups"))
             for (auto& s : j["collapsed_groups"])
                 g_CollapsedGroups.insert(s.get<std::string>());
+        if (j.contains("pinned"))
+            for (auto& v : j["pinned"])
+                g_PinnedIds.push_back(v.get<uint32_t>());
     } catch (...) {}
 }
 
@@ -302,8 +306,24 @@ static void SaveSettings() {
     j["selected_id"]    = g_SelectedId;
     j["collapsed_groups"] = nlohmann::json::array();
     for (auto& s : g_CollapsedGroups) j["collapsed_groups"].push_back(s);
+    j["pinned"] = nlohmann::json::array();
+    for (auto id : g_PinnedIds) j["pinned"].push_back(id);
     std::ofstream f(g_DataDir + "/settings.json");
     if (f.is_open()) f << j.dump(2);
+}
+
+static bool IsPinned(uint32_t id) {
+    return std::find(g_PinnedIds.begin(), g_PinnedIds.end(), id) != g_PinnedIds.end();
+}
+static void PinDecoration(uint32_t id) {
+    if (!IsPinned(id)) g_PinnedIds.push_back(id);
+    g_NeedRebuild = true;
+    SaveSettings();
+}
+static void UnpinDecoration(uint32_t id) {
+    g_PinnedIds.erase(std::remove(g_PinnedIds.begin(), g_PinnedIds.end(), id), g_PinnedIds.end());
+    g_NeedRebuild = true;
+    SaveSettings();
 }
 
 static void ProcessKeybind(const char* id, bool isRelease) {
@@ -320,6 +340,18 @@ static void ProcessKeybind(const char* id, bool isRelease) {
 static void AddonOptions() {
     ThemeGuard themeGuard;
     ImGui::Text("Tyrian Home & Garden");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "|");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Homepage")) {
+        ShellExecuteA(NULL, "open", "https://pie.rocks.cc/projects/tyrian-home-and-garden/", NULL, NULL, SW_SHOWNORMAL);
+    }
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "|");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Buy me a coffee!")) {
+        ShellExecuteA(NULL, "open", "https://ko-fi.com/pieorcake", NULL, NULL, SW_SHOWNORMAL);
+    }
     ImGui::Separator();
     ImGui::TextDisabled("Use the Nexus keybind settings to configure hotkeys.");
     ImGui::Spacing();
@@ -418,7 +450,8 @@ static void AddonRender() {
         DecorationList::Rebuild(
             DecorationData::GetDecorations(),
             static_cast<GroupBy>(g_GroupBy),
-            g_SearchBuf);
+            g_SearchBuf,
+            g_PinnedIds);
         g_NeedRebuild = false;
 
         // Restore selection from previous session (first rebuild after load)
@@ -465,21 +498,20 @@ static void AddonRender() {
     if (ImGui::Combo("##GroupBy", &g_GroupBy, kGroupByLabels, 3)) changed = true;
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputTextWithHint("##Search", "Search decorations...",
+    if (ImGui::InputTextWithHint("##Search", "Search by name or ingredient...",
                                   g_SearchBuf, sizeof(g_SearchBuf))) changed = true;
     if (changed) { g_NeedRebuild = true; }
 
-    if (DecorationData::IsApiLoaded() && !g_MetaLoaded)
-        ImGui::TextDisabled("Loading decoration details...");
-
     ImGui::Separator();
 
-    const float kSplitterW = 4.0f;
+    const float kSplitterW  = 4.0f;
+    const float kStatusBarH = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
     float avail     = ImGui::GetContentRegionAvail().x;
+    float childH    = ImGui::GetContentRegionAvail().y - kStatusBarH;
     float listWidth = std::clamp(g_SplitRatio * avail, 100.0f, avail - 100.0f - kSplitterW);
 
     // === Left column: grouped list ===
-    ImGui::BeginChild("##List", ImVec2(listWidth, 0), false);
+    ImGui::BeginChild("##List", ImVec2(listWidth, childH), false);
 
     if (!DecorationData::IsApiLoaded()) {
         ImGui::TextDisabled("Loading decorations...");
@@ -540,6 +572,15 @@ static void AddonRender() {
                     SaveSettings();
                 }
                 if (selected) ImGui::PopStyleColor(2);
+                // Context menu
+                if (ImGui::BeginPopupContextItem(("##ctx_" + std::to_string(item.id)).c_str())) {
+                    if (IsPinned(item.id)) {
+                        if (ImGui::MenuItem("Unpin Decoration")) UnpinDecoration(item.id);
+                    } else {
+                        if (ImGui::MenuItem("Pin Decoration")) PinDecoration(item.id);
+                    }
+                    ImGui::EndPopup();
+                }
                 // Render icon and text on top of the selectable row
                 ImGui::SameLine(rowX);
                 Texture_t* listIcon = IconCache::GetTexture(item.id);
@@ -596,6 +637,15 @@ static void AddonRender() {
                 ImVec2 btnMax = ImGui::GetItemRectMax();
                 if (selected)
                     ImGui::GetWindowDrawList()->AddRect(btnMin, btnMax, IM_COL32(180, 148, 40, 255), 2.0f, 0, 2.0f);
+                // Context menu — must be inside PushID scope so it attaches to the button
+                if (ImGui::BeginPopupContextItem("##ctx")) {
+                    if (IsPinned(item.id)) {
+                        if (ImGui::MenuItem("Unpin Decoration")) UnpinDecoration(item.id);
+                    } else {
+                        if (ImGui::MenuItem("Pin Decoration")) PinDecoration(item.id);
+                    }
+                    ImGui::EndPopup();
+                }
                 ImGui::PopID();
 
                 if (ImGui::IsItemHovered())
@@ -627,7 +677,7 @@ static void AddonRender() {
     ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.17f, 0.14f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.55f, 0.48f, 0.20f, 0.90f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.65f, 0.55f, 0.20f, 1.0f));
-    ImGui::Button("##splitter", ImVec2(kSplitterW, -1));
+    ImGui::Button("##splitter", ImVec2(kSplitterW, childH));
     ImGui::PopStyleColor(3);
     ImGui::PopStyleVar();
     if (ImGui::IsItemHovered() || ImGui::IsItemActive())
@@ -641,7 +691,7 @@ static void AddonRender() {
 
     // === Right column: preview ===
     ImGui::SameLine(0, 0);
-    ImGui::BeginChild("##Preview", ImVec2(0, 0), false);
+    ImGui::BeginChild("##Preview", ImVec2(0, childH), false);
 
     if (g_SelectedId == 0) {
         ImGui::TextDisabled("Select a decoration to preview");
@@ -765,6 +815,29 @@ static void AddonRender() {
         }
     }
     ImGui::EndChild();
+
+    // === Status bar ===
+    ImGui::Separator();
+    if (!DecorationData::IsApiLoaded()) {
+        ImGui::TextDisabled("Loading decorations from API...");
+    } else if (!g_MetaLoaded) {
+        ImGui::TextDisabled("Loading decoration details...");
+    } else if (g_SelectedId && RecipeData::IsLoadingRecipe(g_SelectedId)) {
+        ImGui::TextDisabled("Fetching recipe...");
+    } else if (g_SelectedId && WikiPreview::IsLoading(g_SelectedId)) {
+        ImGui::TextDisabled("Fetching preview image...");
+    } else if (RecipeData::IsIndexBuilding()) {
+        float progress = RecipeData::GetIndexBuildProgress();
+        int   pct      = (int)(progress * 100.0f);
+        char  overlay[32];
+        snprintf(overlay, sizeof(overlay), "Building ingredient search index... %d%%", pct);
+        ImGui::ProgressBar(progress, ImVec2(-1, ImGui::GetTextLineHeight()), overlay);
+    } else if (RecipeData::IsPreloading()) {
+        ImGui::TextDisabled("Preloading recipes...");
+    } else {
+        ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight()));
+    }
+
     ImGui::End();
 }
 

@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <mutex>
 #include <atomic>
 #include <thread>
@@ -37,6 +38,17 @@ public:
     // so available for all Handiwork decorations without full JIT load.
     static uint32_t GetRecipeId(uint32_t decoId);
 
+    // Returns true if any cached ingredient for decoId has a name containing lfilter
+    // (case-insensitive substring). lfilter must already be lowercase.
+    static bool DecoMatchesIngredient(uint32_t decoId, const std::string& lfilter);
+
+    // Background-activity queries for the status bar
+    static bool IsLoadingRecipe(uint32_t decoId);
+    static bool IsPreloading();
+    static bool IsIndexBuilding();
+    // Returns index-build progress as a 0.0–1.0 fraction (only meaningful while IsIndexBuilding()).
+    static float GetIndexBuildProgress();
+
     // Starts background preloader that batch-fetches recipe IDs for all
     // Handiwork decorations. Call once after both API and metadata are loaded.
     static void StartPreloader();
@@ -71,6 +83,18 @@ private:
     static std::atomic<bool>                       s_recipeIdCacheDirty;
     static std::thread                             s_preloadThread;
     static std::atomic<bool>                       s_preloaderRunning;
+
+    // Ingredient index: lowercase ingredient name → set of decoIds using it
+    static std::mutex                                                       s_ingredientMutex;
+    static std::unordered_map<std::string, std::unordered_set<uint32_t>>   s_ingredientIndex;
+    static std::unordered_set<uint32_t>                                     s_ingredientIndexedDecoIds;
+    static std::atomic<bool>                                                s_ingredientIndexDirty;
+    static std::atomic<bool>                                                s_indexBuilding;
+    static std::atomic<int>                                                 s_indexBuildDone;
+    static std::atomic<int>                                                 s_indexBuildTotal;
+
+    static void IndexResult(uint32_t decoId, const RecipeResult& result);
+    static void SaveIngredientIndex();
 };
 
 } // namespace TyrianHomeAndGarden
